@@ -20,6 +20,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -433,24 +436,48 @@ fun AngelApp() {
     var bearbeitenFang by remember { mutableStateOf<Fang?>(null) } // Fang, der im Bearbeiten-Screen geöffnet wird
     // Merkt sich, von welchem Screen aus die Karte geöffnet wurde, damit "Zurück" korrekt navigiert
     var vorherKartenScreen by remember { mutableStateOf("erfassung") }
+    // ID des Fangs, zu dem nach Rückkehr aus der Karte gescrollt werden soll (null = kein Scrollen)
+    var scrollZuFangId by remember { mutableStateOf<Long?>(null) }
     when (screen) {
-        "erfassung" -> FangErfassungScreen(
-            zeigeListeAn = { aktualisierung++; screen = "liste" },
-            zeigeKarteAn = { vorherKartenScreen = "erfassung"; aktualisierung++; screen = "karte" }
-        )
-        "liste" -> key(aktualisierung) {
-            FangListe(
-                zurueck = { screen = "erfassung" },
-                // kein aktualisierung++ → key(aktualisierung) bleibt gleich → FangListe behält Scrollposition
-                zeigeKarteFuer = { fang -> kartenFang = fang; vorherKartenScreen = "liste"; screen = "karte" },
-                zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" }
-            )
-        }
         "karte" -> key(aktualisierung) {
             FangKarte(zurueck = { screen = vorherKartenScreen }, zentriereFang = kartenFang)
         }
         "bearbeiten" -> bearbeitenFang?.let { fang ->
             FangBearbeiten(fang = fang, zurueck = { aktualisierung++; screen = "liste" })
+        }
+        else -> {
+            // Pager für die zwei Haupt-Screens: Seite 0 = Fang erfassen, Seite 1 = Meine Fänge
+            val pagerState = rememberPagerState(
+                initialPage = if (screen == "liste") 1 else 0,
+                pageCount = { 2 }
+            )
+            // Swipe-Geste → screen-State und FangListe-Aktualisierung
+            LaunchedEffect(pagerState.currentPage) {
+                screen = if (pagerState.currentPage == 1) "liste" else "erfassung"
+                if (pagerState.currentPage == 1) aktualisierung++ // FangListe beim Wechsel zu Seite 1 neu laden
+            }
+            // Button-Navigation → Pager animieren
+            LaunchedEffect(screen) {
+                val zielSeite = if (screen == "liste") 1 else 0
+                if (pagerState.currentPage != zielSeite) pagerState.animateScrollToPage(zielSeite)
+            }
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                when (page) {
+                    0 -> FangErfassungScreen(
+                        zeigeListeAn = { aktualisierung++; screen = "liste" },
+                        zeigeKarteAn = { vorherKartenScreen = "erfassung"; aktualisierung++; screen = "karte" }
+                    )
+                    1 -> key(aktualisierung) {
+                        FangListe(
+                            zurueck = { screen = "erfassung" },
+                            zeigeKarteFuer = { fang -> kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte" },
+                            zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
+                            scrollZuFangId = scrollZuFangId,
+                            onScrollZuFangIdVerbraucht = { scrollZuFangId = null }
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -531,63 +558,83 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                 gpsStatus = "Kein GPS im Foto"
                 wetterStatus = "Kein GPS verfügbar"
             }
-            if (uris.size > 1) {
-                val weitereAnzahl = uris.drop(1).size
-                importMeldung = "$weitereAnzahl weitere Fotos werden im Hintergrund gespeichert..."
-                for ((index, weitereUri) in uris.drop(1).withIndex()) {
-                    val (exifDatum2, lat2, lon2) = exifDatenLesen(context, weitereUri)
-                    val pfad2 = uriZuPfad(context, weitereUri, index + 1)
-                    val verwendetesDatum2 = if (exifDatum2.isNotBlank()) exifDatum2 else datum
-                    if (pfad2.isNotBlank()) {
-                        val fangId = System.currentTimeMillis() + index + 1
-                        // Alles in einem Hintergrund-Thread: Wetter wird synchron geholt BEVOR
-                        // der Fang gespeichert wird — so gibt es keine Race Condition mehr
-                        thread {
-                            val wetter: Wetter? = if (lat2 != 0.0) {
-                                try {
-                                    val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
-                                        SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum2) ?: Date()
-                                    )
-                                    val url = "https://archive-api.open-meteo.com/v1/archive?latitude=${String.format(Locale.US, "%.6f", lat2)}&longitude=${String.format(Locale.US, "%.6f", lon2)}&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
-                                    val response = URL(url).readText()
-                                    val json = JSONObject(response)
-                                    val hourly = json.getJSONObject("hourly")
-                                    Wetter(
-                                        temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
-                                        wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
-                                        luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
-                                        bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
-                                    )
-                                } catch (e: Exception) { null }
-                            } else null
-                            // Fang mit vollständigen Wetter- und Gezeitendaten speichern
-                            fangspeichern(context, Fang(
-                                id = fangId,
-                                fischart = "wird erkannt...",
-                                laenge = "",
-                                notizen = "Aus Galerie importiert",
-                                datum = verwendetesDatum2,
-                                latitude = lat2,
-                                longitude = lon2,
-                                temperatur = wetter?.temperatur ?: 0.0,
-                                wind = wetter?.wind ?: 0.0,
-                                luftdruck = wetter?.luftdruck ?: 0.0,
-                                bewoelkung = wetter?.bewoelkung ?: 0,
-                                fotoPfad = pfad2,
-                                gezeiten = gezeiteBerechnen(verwendetesDatum2, lat2, lon2)
-                            ))
-                            // Fischart ist der einzige verbleibende async-Schritt — Wetter ist bereits gespeichert
-                            fischartErkennen(context, pfad2) { erkannteArt ->
-                                val gespeicherter = faengeladen(context).find { it.id == fangId }
-                                if (gespeicherter != null) {
-                                    fangAktualisieren(context, gespeicherter.copy(
-                                        fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
-                                    ))
-                                }
+            // ── Import-Statistik (synchron erfasst, bevor Threads starten) ───────
+            var erfolgreich = if (fotoPfad.isNotBlank()) 1 else 0
+            var fehlgeschlagen = if (fotoPfad.isBlank()) 1 else 0
+            var mitExif = if (exifDatum.isNotBlank()) 1 else 0
+            var mitGps = if (lat != 0.0) 1 else 0
+
+            // ── Weitere Fotos: direkt im Hintergrund gespeichert ─────────────────
+            for ((index, weitereUri) in uris.drop(1).withIndex()) {
+                val (exifDatum2, lat2, lon2) = exifDatenLesen(context, weitereUri)
+                val pfad2 = uriZuPfad(context, weitereUri, index + 1)
+                val verwendetesDatum2 = if (exifDatum2.isNotBlank()) exifDatum2 else datum
+                if (pfad2.isNotBlank()) {
+                    erfolgreich++
+                    if (exifDatum2.isNotBlank()) mitExif++
+                    if (lat2 != 0.0) mitGps++
+                    val fangId = System.currentTimeMillis() + index + 1
+                    // Alles in einem Hintergrund-Thread: Wetter wird synchron geholt BEVOR
+                    // der Fang gespeichert wird — so gibt es keine Race Condition mehr
+                    thread {
+                        val wetter: Wetter? = if (lat2 != 0.0) {
+                            try {
+                                val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
+                                    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum2) ?: Date()
+                                )
+                                val url = "https://archive-api.open-meteo.com/v1/archive?latitude=${String.format(Locale.US, "%.6f", lat2)}&longitude=${String.format(Locale.US, "%.6f", lon2)}&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                                val response = URL(url).readText()
+                                val json = JSONObject(response)
+                                val hourly = json.getJSONObject("hourly")
+                                Wetter(
+                                    temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
+                                    wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
+                                    luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
+                                    bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
+                                )
+                            } catch (e: Exception) { null }
+                        } else null
+                        // Fang mit vollständigen Wetter- und Gezeitendaten speichern
+                        fangspeichern(context, Fang(
+                            id = fangId,
+                            fischart = "wird erkannt...",
+                            laenge = "",
+                            notizen = "Aus Galerie importiert",
+                            datum = verwendetesDatum2,
+                            latitude = lat2,
+                            longitude = lon2,
+                            temperatur = wetter?.temperatur ?: 0.0,
+                            wind = wetter?.wind ?: 0.0,
+                            luftdruck = wetter?.luftdruck ?: 0.0,
+                            bewoelkung = wetter?.bewoelkung ?: 0,
+                            fotoPfad = pfad2,
+                            gezeiten = gezeiteBerechnen(verwendetesDatum2, lat2, lon2)
+                        ))
+                        // Fischart ist der einzige verbleibende async-Schritt — Wetter ist bereits gespeichert
+                        fischartErkennen(context, pfad2) { erkannteArt ->
+                            val gespeicherter = faengeladen(context).find { it.id == fangId }
+                            if (gespeicherter != null) {
+                                fangAktualisieren(context, gespeicherter.copy(
+                                    fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
+                                ))
                             }
                         }
                     }
+                } else {
+                    fehlgeschlagen++
                 }
+            }
+
+            // ── Import-Meldung zusammenstellen ───────────────────────────────────
+            val gesamt = uris.size
+            importMeldung = buildString {
+                if (gesamt == 1) {
+                    append(if (erfolgreich == 1) "Foto importiert" else "Import fehlgeschlagen")
+                } else {
+                    append("$erfolgreich von $gesamt Fotos importiert")
+                    if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
+                }
+                append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
             }
         }
     }
@@ -860,9 +907,27 @@ fun FangBearbeiten(fang: Fang, zurueck: () -> Unit) {
 
 // Screen mit der scrollbaren Liste aller Fänge; bietet Backup/Import/GPX-Export und Navigation zur Karte
 @Composable
-fun FangListe(zurueck: () -> Unit, zeigeKarteFuer: (Fang) -> Unit, zeigeBearbeitenFuer: (Fang) -> Unit) {
+fun FangListe(
+    zurueck: () -> Unit,
+    zeigeKarteFuer: (Fang) -> Unit,
+    zeigeBearbeitenFuer: (Fang) -> Unit,
+    // Nach Rückkehr von der Karte: ID des Fangs, zu dem gescrollt werden soll
+    scrollZuFangId: Long? = null,
+    onScrollZuFangIdVerbraucht: () -> Unit = {}
+) {
     val context = LocalContext.current
     var faenge by remember { mutableStateOf(faengeladen(context)) }
+    // Zustand der LazyColumn — wird für programmatisches Scrollen benötigt
+    val listState = rememberLazyListState()
+
+    // Scrollt zur angeforderten Fang-Position, sobald von der Karte zurückgekehrt wird
+    LaunchedEffect(scrollZuFangId) {
+        if (scrollZuFangId != null) {
+            val index = faenge.indexOfFirst { it.id == scrollZuFangId }
+            if (index >= 0) listState.animateScrollToItem(index)
+            onScrollZuFangIdVerbraucht()
+        }
+    }
     var exportMeldung by remember { mutableStateOf("") }
 
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -930,7 +995,7 @@ fun FangListe(zurueck: () -> Unit, zeigeKarteFuer: (Fang) -> Unit, zeigeBearbeit
         if (faenge.isEmpty()) {
             Text("Noch keine Fänge erfasst.", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 32.dp))
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(faenge, key = { it.id }) { fang ->
                     Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
