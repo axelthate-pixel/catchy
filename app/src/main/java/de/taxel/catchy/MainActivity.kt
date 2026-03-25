@@ -913,12 +913,12 @@ fun FangListe(zurueck: () -> Unit, zeigeKarteFuer: (Fang) -> Unit, zeigeBearbeit
                             putExtra(Intent.EXTRA_STREAM, uri)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
-                        context.startActivity(Intent.createChooser(intent, "GPX für Garmin teilen"))
+                        context.startActivity(Intent.createChooser(intent, "GPX teilen"))
                     } else exportMeldung = "GPX Export fehlgeschlagen"
                 },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
-            ) { Text("Garmin") }
+            ) { Text("GPX->") }
         }
         if (exportMeldung.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
