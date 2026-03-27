@@ -438,12 +438,14 @@ fun AngelApp() {
     var vorherKartenScreen by remember { mutableStateOf("erfassung") }
     // ID des Fangs, zu dem nach Rückkehr aus der Karte gescrollt werden soll (null = kein Scrollen)
     var scrollZuFangId by remember { mutableStateOf<Long?>(null) }
+    // ID des bearbeiteten Fangs, zu dem nach Speichernscrollt werden soll
+    var scrollZuBearbeiteterFangId by remember { mutableStateOf<Long?>(null) }
     when (screen) {
         "karte" -> key(aktualisierung) {
             FangKarte(zurueck = { screen = vorherKartenScreen }, zentriereFang = kartenFang)
         }
         "bearbeiten" -> bearbeitenFang?.let { fang ->
-            FangBearbeiten(fang = fang, zurueck = { aktualisierung++; screen = "liste" })
+            FangBearbeiten(fang = fang, zeigeListeFuer = { fangId -> scrollZuBearbeiteterFangId = fangId; aktualisierung++; screen = "liste" })
         }
         else -> {
             // Pager für die zwei Haupt-Screens: Seite 0 = Fang erfassen, Seite 1 = Meine Fänge
@@ -472,8 +474,8 @@ fun AngelApp() {
                             zurueck = { screen = "erfassung" },
                             zeigeKarteFuer = { fang -> kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte" },
                             zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
-                            scrollZuFangId = scrollZuFangId,
-                            onScrollZuFangIdVerbraucht = { scrollZuFangId = null }
+                            scrollZuFangId = scrollZuBearbeiteterFangId ?: scrollZuFangId,
+                            onScrollZuFangIdVerbraucht = { scrollZuBearbeiteterFangId = null; scrollZuFangId = null }
                         )
                     }
                 }
@@ -778,7 +780,7 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
 
 // Screen zum Bearbeiten eines bestehenden Fangs — alle Felder inklusive GPS und Wetter sind änderbar
 @Composable
-fun FangBearbeiten(fang: Fang, zurueck: () -> Unit) {
+fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
     val context = LocalContext.current
     var fischart by remember { mutableStateOf(fang.fischart) }
     var laenge by remember { mutableStateOf(fang.laenge) }
@@ -823,7 +825,7 @@ fun FangBearbeiten(fang: Fang, zurueck: () -> Unit) {
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Fang bearbeiten", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Button(onClick = zurueck) { Text("Abbrechen") }
+            Button(onClick = { zeigeListeFuer(-1L) }) { Text("Abbrechen") }
         }
         if (fotoUri != null) {
             Image(painter = rememberAsyncImagePainter(fotoUri), contentDescription = "Fang Foto",
@@ -897,7 +899,7 @@ fun FangBearbeiten(fang: Fang, zurueck: () -> Unit) {
                     fotoPfad = fotoPfad,
                     gezeiten = gezeiteBerechnen(datum, lat, lon)
                 ))
-                zurueck()
+                zeigeListeFuer(fang.id)
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
