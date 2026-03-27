@@ -1036,8 +1036,18 @@ fun FangListe(
 fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
     val context = LocalContext.current
     val faenge = remember { faengeladen(context).filter { it.latitude != 0.0 } }
+    var meinePosition by remember { mutableStateOf<Location?>(null) }
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    LaunchedEffect(Unit) {
+        val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (hatBerechtigung) {
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { location ->
+                meinePosition = location
+            }
+        }
+    }
     Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-        if (faenge.isEmpty()) {
+        if (faenge.isEmpty() && meinePosition == null) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("Noch keine Fangspots mit GPS.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1047,9 +1057,9 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                     MapView(ctx).apply {
                         setTileSource(TileSourceFactory.MAPNIK)
                         setMultiTouchControls(true)
-                        val zielFang = zentriereFang ?: faenge.first()
+                        val zielFang = zentriereFang ?: faenge.firstOrNull()
                         controller.setZoom(if (zentriereFang != null) 15.0 else 12.0)
-                        controller.setCenter(GeoPoint(zielFang.latitude, zielFang.longitude))
+                        zielFang?.let { controller.setCenter(GeoPoint(it.latitude, it.longitude)) }
                         faenge.forEach { fang ->
                             val marker = Marker(this)
                             marker.position = GeoPoint(fang.latitude, fang.longitude)
@@ -1057,6 +1067,19 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C"
                             overlays.add(marker)
                         }
+                    }
+                },
+                update = { mapView ->
+                    // Entferne alten Standort-Marker (falls vorhanden) und füge neuen hinzu
+                    mapView.overlays.removeAll { it is Marker && (it as Marker).title == "Mein Standort" }
+                    meinePosition?.let { pos ->
+                        val meinMarker = Marker(mapView)
+                        meinMarker.position = GeoPoint(pos.latitude, pos.longitude)
+                        meinMarker.title = "Mein Standort"
+                        meinMarker.snippet = "${String.format("%.5f", pos.latitude)}, ${String.format("%.5f", pos.longitude)}"
+                        meinMarker.setIcon(ContextCompat.getDrawable(mapView.context, android.R.drawable.ic_menu_mylocation))
+                        mapView.overlays.add(meinMarker)
+                        mapView.invalidate()
                     }
                 },
                 modifier = Modifier.fillMaxSize()
