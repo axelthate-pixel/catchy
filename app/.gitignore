@@ -1,1 +1,34 @@
 /build
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# --- Build Ausgaben ---
+build/
+*/build/
+
+# --- Android / Google Spezifisches ---
+*.apk
+*.ap_
+*.aab
+*.dex
+
+# --- Windows Systemdateien ---
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# --- Sensible Daten (Keys) ---
+*.jks
+*.keystore
+google-services.json
+
+# --- Kotlin / Java ---
+bin/
+gen/
