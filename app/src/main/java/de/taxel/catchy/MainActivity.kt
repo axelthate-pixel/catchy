@@ -1064,7 +1064,17 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             val marker = Marker(this)
                             marker.position = GeoPoint(fang.latitude, fang.longitude)
                             marker.title = fang.fischart
-                            marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C"
+                            
+                            // Distanz berechnen, falls Standort verfügbar
+                            val distanzText = meinePosition?.let { pos ->
+                                val ergebnisse = FloatArray(1)
+                                Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse)
+                                val meter = ergebnisse[0]
+                                if (meter >= 1000) " | Distanz: ${String.format("%.1f", meter / 1000)} km"
+                                else " | Distanz: ${meter.toInt()} m"
+                            } ?: ""
+                            
+                            marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C$distanzText"
                             overlays.add(marker)
                         }
                     }
@@ -1080,6 +1090,21 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                         meinMarker.setIcon(ContextCompat.getDrawable(mapView.context, android.R.drawable.ic_menu_mylocation))
                         mapView.overlays.add(meinMarker)
                         mapView.invalidate()
+                        
+                        // Snippets der Fang-Marker aktualisieren, um Distanz anzuzeigen
+                        mapView.overlays.filterIsInstance<Marker>().forEach { marker ->
+                            if (marker.title != "Mein Standort") {
+                                val fang = faenge.find { it.fischart == marker.title && it.latitude == marker.position.latitude }
+                                if (fang != null) {
+                                    val ergebnisse = FloatArray(1)
+                                    Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse)
+                                    val meter = ergebnisse[0]
+                                    val distText = if (meter >= 1000) " | Distanz: ${String.format("%.1f", meter / 1000)} km"
+                                    else " | Distanz: ${meter.toInt()} m"
+                                    marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C$distText"
+                                }
+                            }
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1098,4 +1123,3 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
         }
     }
 }
- 
