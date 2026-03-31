@@ -1,0 +1,146 @@
+name: Code Quality — Detekt
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  detekt:
+    name: Detekt Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # needed to commit memory.json back
+      pull-requests: write  # needed to post PR comments
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history so we can commit back
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run Detekt
+        # continue-on-error so we can still save the report even when issues are found
+        continue-on-error: true
+        run: ./gradlew detekt --no-daemon
+
+      - name: Update memory.json
+        run: |
+          python3 .github/scripts/detekt_to_memory.py \
+            build/reports/detekt/detekt.xml \
+            memory.json \
+            "${{ github.sha }}" \
+            "${{ github.ref_name }}"
+
+      - name: Upload Detekt HTML Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detekt-report-${{ github.sha }}
+          path: build/reports/detekt/
+          retention-days: 30
+
+      - name: Commit memory.json
+        if: github.event_name == 'push'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add memory.json
+          if git diff --cached --quiet; then
+            echo "No changes to memory.json"
+          else
+            git commit -m "chore: update detekt memory.json [skip ci]"
+            git push
+          fi
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const memoryPath = 'memory.json';
+
+            if (!fs.existsSync(memoryPath)) {
+              console.log('memory.json not found, skipping comment');
+              return;
+            }
+
+            const memory = JSON.parse(fs.readFileSync(memoryPath, 'utf8'));
+            const latest = memory.latest || {};
+            const trend  = memory.trend  || null;
+
+            const trendLine = trend
+              ? (trend.direction === 'improved'
+                  ? `↓ **Verbessert** um ${Math.abs(trend.delta)} Issues`
+                  : trend.direction === 'worse'
+                  ? `↑ **Verschlechtert** um ${Math.abs(trend.delta)} Issues`
+                  : `→ **Stabil** — keine Änderung`)
+              : '_(Erster Run — kein Vergleich möglich)_';
+
+            const errorBadge   = latest.errors   > 0 ? '❌' : '✅';
+            const warningBadge = latest.warnings > 0 ? '⚠️' : '✅';
+
+            let topRules = '';
+            const runs = memory.runs || [];
+            if (runs.length > 0) {
+              const lastRun = runs[runs.length - 1];
+              topRules = (lastRun.top_rules || [])
+                .slice(0, 5)
+                .map(r => `| \`${r.rule}\` | ${r.count} |`)
+                .join('\n');
+            }
+
+            const body = [
+              '## Detekt Code Quality Report',
+              '',
+              `| Kategorie | Anzahl |`,
+              `|-----------|--------|`,
+              `| ${errorBadge} Fehler | **${latest.errors ?? 0}** |`,
+              `| ${warningBadge} Warnungen | **${latest.warnings ?? 0}** |`,
+              `| ℹ️ Info | **${latest.infos ?? 0}** |`,
+              `| **Gesamt** | **${latest.total_issues ?? 0}** |`,
+              '',
+              `**Trend:** ${trendLine}`,
+              '',
+              topRules ? `### Top Regeln\n| Regel | Anzahl |\n|-------|--------|\n${topRules}` : '',
+              '',
+              `_Commit: \`${{ github.sha }}\` — Branch: \`${{ github.ref_name }}\`_`,
+            ].filter(l => l !== undefined).join('\n');
+
+            await github.rest.issues.createComment({
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if errors found
+        run: |
+          python3 - <<'EOF'
+          import json, sys
+          try:
+              with open("memory.json") as f:
+                  memory = json.load(f)
+              errors = memory.get("latest", {}).get("errors", 0)
+              if errors > 0:
+                  print(f"❌ Detekt found {errors} error(s). Fix before merging.")
+                  sys.exit(1)
+              else:
+                  total = memory.get("latest", {}).get("total_issues", 0)
+                  print(f"✅ No Detekt errors. Total issues (warnings/info): {total}")
+          except FileNotFoundError:
+              print("⚠️  memory.json not found — Detekt may have failed to produce output.")
+              sys.exit(1)
+          EOF
