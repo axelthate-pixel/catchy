@@ -385,12 +385,35 @@ fun fotoDateiErstellen(context: Context): File {
 // Kopiert ein Bild von einer Content-URI in das app-eigene Bilderverzeichnis und gibt den absoluten Pfad zurück.
 // suffix verhindert Namenskollisionen beim gleichzeitigen Import mehrerer Fotos.
 fun uriZuPfad(context: Context, uri: Uri, suffix: Int = 0): String {
+    val maxSeite = 1920
     return try {
         val zeitstempel = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
         val zielDatei = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "IMPORT_${zeitstempel}_${suffix}.jpg")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            zielDatei.outputStream().use { output -> input.copyTo(output) }
-        }
+
+        // Originalgröße auslesen ohne Pixel zu laden
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, bounds) }
+
+        // inSampleSize: grobe Vorverkleinerung im Speicher bevor das volle Bild geladen wird
+        var sampleSize = 1
+        var w = bounds.outWidth; var h = bounds.outHeight
+        while (w > maxSeite * 2 || h > maxSeite * 2) { sampleSize *= 2; w /= 2; h /= 2 }
+
+        val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val bitmap = context.contentResolver.openInputStream(uri)?.use {
+            android.graphics.BitmapFactory.decodeStream(it, null, opts)
+        } ?: return ""
+
+        // Feinskalierung auf maxSeite px (längste Seite), Seitenverhältnis bleibt erhalten
+        val skaliert = if (bitmap.width > maxSeite || bitmap.height > maxSeite) {
+            val faktor = maxSeite.toFloat() / maxOf(bitmap.width, bitmap.height)
+            val nw = (bitmap.width * faktor).toInt()
+            val nh = (bitmap.height * faktor).toInt()
+            android.graphics.Bitmap.createScaledBitmap(bitmap, nw, nh, true).also { bitmap.recycle() }
+        } else bitmap
+
+        zielDatei.outputStream().use { skaliert.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }
+        skaliert.recycle()
         zielDatei.absolutePath
     } catch (e: Exception) { "" }
 }

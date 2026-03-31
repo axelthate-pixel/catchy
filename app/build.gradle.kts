@@ -1,7 +1,27 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    FileInputStream(keystorePropertiesFile).use { stream ->
+        keystoreProperties.load(stream)
+    }
+}
+val signingKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+val hasCompleteKeystoreProperties = signingKeys.all { key ->
+    !keystoreProperties.getProperty(key).isNullOrBlank()
+}
+if (keystorePropertiesFile.exists() && !hasCompleteKeystoreProperties) {
+    throw GradleException(
+        "keystore.properties exists but is incomplete. Required keys: ${signingKeys.joinToString(", ")}"
+    )
 }
 
 android {
@@ -12,15 +32,36 @@ android {
         applicationId = "de.taxel.angelapp"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists() && hasCompleteKeystoreProperties) {
+            create("release") {
+                val configuredStoreFile = file(keystoreProperties.getProperty("storeFile"))
+                if (!configuredStoreFile.exists()) {
+                    throw GradleException("Configured keystore file does not exist: $configuredStoreFile")
+                }
+                if (configuredStoreFile.name.endsWith(".gradle.kts")) {
+                    throw GradleException("Configured storeFile points to a Gradle script, not a keystore: $configuredStoreFile")
+                }
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = configuredStoreFile
+                storePassword = keystoreProperties.getProperty("storePassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (keystorePropertiesFile.exists() && hasCompleteKeystoreProperties) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

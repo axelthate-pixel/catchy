@@ -42,6 +42,15 @@ class CatchyUnitTest {
     }
 
     @Test
+    fun leereListeWirdOhneFehlerSortiert() {
+        val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
+        val sortiert = emptyList<Fang>().sortedByDescending {
+            try { sdf.parse(it.datum) } catch (e: Exception) { Date(0) }
+        }
+        assertTrue("Leere Liste bleibt leer nach Sortierung", sortiert.isEmpty())
+    }
+
+    @Test
     fun ungueltigesDatumLandetAmEndeDerSortiertenListe() {
         // Die App darf bei fehlerhaften Datumseinträgen nicht abstürzen —
         // solche Einträge sollen ans Ende sortiert werden.
@@ -72,6 +81,13 @@ class CatchyUnitTest {
         val neueIds = importIds.filter { !bestehendeIds.contains(it) }
         assertEquals(1, neueIds.size)
         assertEquals(200L, neueIds[0])
+    }
+
+    @Test
+    fun duplikaterkennungMitLeererImportListeErgibtKeineNeueIds() {
+        val bestehendeIds = setOf(100L, 200L)
+        val neueIds = emptyList<Long>().filter { !bestehendeIds.contains(it) }
+        assertTrue("Leere Importliste soll keine neuen IDs ergeben", neueIds.isEmpty())
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -158,6 +174,19 @@ class CatchyUnitTest {
     }
 
     @Test
+    fun gpxMitExtremerLaengegradKoordinateExportiert() {
+        // Koordinaten nahe der Datumsgrenze (±180°) müssen korrekt
+        // im US-Locale-Format ausgegeben werden — ohne Komma statt Punkt.
+        val faenge = listOf(
+            Fang(id = 1L, fischart = "Thunfisch", laenge = "", notizen = "", datum = "08.03.2026 15:50",
+                latitude = 0.5, longitude = 179.999)
+        )
+        val gpx = gpxErstellen(faenge)
+        assertTrue(gpx.contains("""lon="179.999000""""))
+        assertTrue(gpx.contains("""lat="0.500000""""))
+    }
+
+    @Test
     fun gpxMitLeererListeIstValidesLeeresDokument() {
         // Auch ohne Fänge muss die GPX-Datei strukturell valide XML sein —
         // sonst schlägt der Import in Navigationsgeräten fehl.
@@ -183,7 +212,6 @@ class CatchyUnitTest {
     @Test
     fun gezeitenGibtStringZurueckBeiKuestenstandort() {
         val ergebnis = gezeiteBerechnen("08.03.2026 15:50", 53.867, 8.700)
-        assertTrue("Gezeiten sollten nicht leer sein bei Küstenstandort", ergebnis.isNotBlank())
         val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "Steigende Flut", "Fallende Ebbe")
         assertTrue("Gezeitenwert muss einen gültigen Begriff enthalten",
             gueltigeWerte.any { ergebnis.contains(it) })
@@ -201,7 +229,9 @@ class CatchyUnitTest {
     fun gezeitenGibtSinnvollenWertFuerBinnenseeZurueck() {
         // Die astronomische Berechnung läuft auch für Binnengewässer stabil durch.
         val ergebnis = gezeiteBerechnen("08.03.2026 15:50", 47.65, 9.25)
-        assertTrue("Gezeitenwert sollte für jeden Standort berechnet werden", ergebnis.isNotBlank())
+        val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "Steigende Flut", "Fallende Ebbe")
+        assertTrue("Gezeitenwert sollte für jeden Standort einen gültigen Begriff enthalten",
+            gueltigeWerte.any { ergebnis.contains(it) })
     }
 
     @Test

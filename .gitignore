@@ -16,3 +16,6 @@ local.properties
 hs_err_pid*.log
 replay_pid*.log
 /app/release/
+keystore.properties
+*.jks
+*.keystore

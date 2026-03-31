@@ -204,6 +204,22 @@ class CatchyInstrumentedTest {
     }
 
     @Test
+    fun exifAusKorrupterJpegDateiCrashtNicht() {
+        // Eine Datei mit .jpg-Endung, die aber keinen gültigen JPEG-Inhalt hat
+        // (z.B. ein umbenanntes Textdokument oder eine beschädigte Datei),
+        // darf die App nicht zum Absturz bringen.
+        val datei = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "korrupt.jpg")
+        datei.writeText("Dies ist kein JPEG-Inhalt sondern Klartext.")
+        testDateien.add(datei)
+
+        val uri = Uri.fromFile(datei)
+        val (datum, lat, lon) = exifDatenLesen(context, uri)
+        assertNotNull("Datum darf nicht null sein", datum)
+        assertEquals(0.0, lat, 0.0)
+        assertEquals(0.0, lon, 0.0)
+    }
+
+    @Test
     fun exifOhneJedeMetadataCrashtNicht() {
         // Ein Foto ohne jegliche EXIF-Metadaten (z.B. ein Screenshot oder
         // ein Foto das bearbeitet und dabei die Metadaten verloren hat).
@@ -454,6 +470,22 @@ class CatchyInstrumentedTest {
         assertEquals("65", hecht?.laenge)
         assertEquals("Länge korrigiert", hecht?.notizen)
         assertEquals("45", zander?.laenge) // Zander darf sich nicht verändert haben
+    }
+
+    @Test
+    fun fangMitLeeresFotoPfadWirdKorrektGespeichertUndGeladen() {
+        // Fänge ohne Foto (fotoPfad leer) müssen korrekt gespeichert und geladen
+        // werden können — z.B. wenn der Nutzer den Fang manuell eingibt.
+        val fang = Fang(
+            id = 42L, fischart = "Barsch", laenge = "25",
+            notizen = "Ohne Foto", datum = "08.03.2026 10:00",
+            fotoPfad = ""
+        )
+        fangspeichern(context, fang)
+        val geladen = faengeladen(context).first()
+        assertEquals("", geladen.fotoPfad)
+        assertEquals("Barsch", geladen.fischart)
+        assertEquals("25", geladen.laenge)
     }
 
     @Test
