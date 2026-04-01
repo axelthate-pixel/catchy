@@ -2,9 +2,8 @@ name: Code Quality — Detekt
 
 on:
   push:
-    branches: [ "**" ]
-  pull_request:
     branches: [ main ]
+  pull_request:
 
 jobs:
   detekt:
@@ -83,12 +82,14 @@ jobs:
 
             const trendLine = trend
               ? (trend.direction === 'improved'
-                  ? `↓ **Verbessert** um ${Math.abs(trend.delta)} Issues`
+                  ? `↓ **Verbessert** um ${Math.abs(trend.delta)} Issues (Score ${trend.score_delta >= 0 ? '+' : ''}${trend.score_delta})`
                   : trend.direction === 'worse'
-                  ? `↑ **Verschlechtert** um ${Math.abs(trend.delta)} Issues`
+                  ? `↑ **Verschlechtert** um ${Math.abs(trend.delta)} Issues (Score ${trend.score_delta >= 0 ? '+' : ''}${trend.score_delta})`
                   : `→ **Stabil** — keine Änderung`)
               : '_(Erster Run — kein Vergleich möglich)_';
 
+            const score = latest.score ?? 100;
+            const scoreBadge = score >= 90 ? '🟢' : score >= 70 ? '🟡' : '🔴';
             const errorBadge   = latest.errors   > 0 ? '❌' : '✅';
             const warningBadge = latest.warnings > 0 ? '⚠️' : '✅';
 
@@ -107,6 +108,7 @@ jobs:
               '',
               `| Kategorie | Anzahl |`,
               `|-----------|--------|`,
+              `| ${scoreBadge} Score | **${score}** / 100 |`,
               `| ${errorBadge} Fehler | **${latest.errors ?? 0}** |`,
               `| ${warningBadge} Warnungen | **${latest.warnings ?? 0}** |`,
               `| ℹ️ Info | **${latest.infos ?? 0}** |`,

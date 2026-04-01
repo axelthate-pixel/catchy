@@ -15,6 +15,14 @@ SEVERITY_MAP = {
     "info": "info",
 }
 
+# Gewichtung für den Score: Fehler zählen 10x, Warnungen 2x, Infos 0.5x
+SCORE_WEIGHTS = {"error": 10.0, "warning": 2.0, "info": 0.5}
+
+def calculate_score(by_severity: dict) -> float:
+    """Qualitätsscore: 100 = sauber, sinkt gewichtet nach Schweregrad. Minimum: 0."""
+    deduction = sum(by_severity.get(sev, 0) * weight for sev, weight in SCORE_WEIGHTS.items())
+    return max(0.0, round(100.0 - deduction, 1))
+
 def parse_detekt_xml(xml_path: str) -> dict:
     tree = ET.parse(xml_path)
     root = tree.getroot()
@@ -57,6 +65,7 @@ def parse_detekt_xml(xml_path: str) -> dict:
 
     return {
         "total": len(issues),
+        "score": calculate_score(by_severity),
         "by_severity": by_severity,
         "top_rules": [{"rule": r, "count": c} for r, c in top_rules],
         "issues": issues,
@@ -80,6 +89,7 @@ def update_memory(memory_path: str, run_data: dict, commit_sha: str, branch: str
         "commit": commit_sha,
         "branch": branch,
         "summary": {
+            "score": run_data["score"],
             "total_issues": run_data["total"],
             "errors": run_data["by_severity"]["error"],
             "warnings": run_data["by_severity"]["warning"],
@@ -90,29 +100,33 @@ def update_memory(memory_path: str, run_data: dict, commit_sha: str, branch: str
     }
 
     memory["runs"].append(entry)
-    # Keep last 50 runs to avoid unbounded growth
-    memory["runs"] = memory["runs"][-50:]
+    # Nur die letzten 10 Runs behalten
+    memory["runs"] = memory["runs"][-10:]
     memory["latest"] = entry["summary"]
+    # Bekannte Probleme: vollständige Issue-Liste des letzten Runs
+    memory["known_issues"] = run_data["issues"]
     memory["last_updated"] = entry["timestamp"]
 
-    # Trend: compare with previous run
+    # Trend: Vergleich mit vorherigem Run (Issues und Score)
     if len(memory["runs"]) >= 2:
-        prev = memory["runs"][-2]["summary"]["total_issues"]
-        curr = entry["summary"]["total_issues"]
+        prev = memory["runs"][-2]["summary"]
+        curr = entry["summary"]
+        delta_issues = curr["total_issues"] - prev["total_issues"]
         memory["trend"] = {
-            "delta": curr - prev,
-            "direction": "improved" if curr < prev else ("worse" if curr > prev else "stable"),
+            "delta": delta_issues,
+            "score_delta": round(curr["score"] - prev["score"], 1),
+            "direction": "improved" if delta_issues < 0 else ("worse" if delta_issues > 0 else "stable"),
         }
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(memory, f, indent=2, ensure_ascii=False)
 
-    print(f"memory.json updated: {entry['summary']}")
+    print(f"memory.json updated: score={entry['summary']['score']} | {entry['summary']}")
     if "trend" in memory:
         t = memory["trend"]
         symbol = "↓" if t["direction"] == "improved" else ("↑" if t["direction"] == "worse" else "→")
-        print(f"Trend: {symbol} {t['direction']} ({t['delta']:+d} issues)")
+        print(f"Trend: {symbol} {t['direction']} ({t['delta']:+d} issues, Score {t['score_delta']:+.1f})")
 
 
 if __name__ == "__main__":
