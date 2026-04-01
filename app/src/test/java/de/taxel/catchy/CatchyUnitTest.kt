@@ -15,7 +15,8 @@ import java.util.*
  *  2. Duplikaterkennung beim Backup-Import
  *  3. GPX-Export für Navigationssoftware
  *  4. Gezeitenberechnung (astronomische Näherung)
- *  5. Datum-Umrechnung aus Kamera-EXIF-Daten (Formatlogik)
+ *  5. Mondphasenberechnung (astronomische Näherung)
+ *  6. Datum-Umrechnung aus Kamera-EXIF-Daten (Formatlogik)
  */
 class CatchyUnitTest {
 
@@ -212,7 +213,7 @@ class CatchyUnitTest {
     @Test
     fun gezeitenGibtStringZurueckBeiKuestenstandort() {
         val ergebnis = gezeiteBerechnen("08.03.2026 15:50", 53.867, 8.700)
-        val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "Steigende Flut", "Fallende Ebbe")
+        val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "bis Flut", "bis Ebbe")
         assertTrue("Gezeitenwert muss einen gültigen Begriff enthalten",
             gueltigeWerte.any { ergebnis.contains(it) })
     }
@@ -229,7 +230,7 @@ class CatchyUnitTest {
     fun gezeitenGibtSinnvollenWertFuerBinnenseeZurueck() {
         // Die astronomische Berechnung läuft auch für Binnengewässer stabil durch.
         val ergebnis = gezeiteBerechnen("08.03.2026 15:50", 47.65, 9.25)
-        val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "Steigende Flut", "Fallende Ebbe")
+        val gueltigeWerte = listOf("Hochwasser", "Niedrigwasser", "bis Flut", "bis Ebbe")
         assertTrue("Gezeitenwert sollte für jeden Standort einen gültigen Begriff enthalten",
             gueltigeWerte.any { ergebnis.contains(it) })
     }
@@ -253,7 +254,57 @@ class CatchyUnitTest {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 5. EXIF Datums-Format
+    // 5. Mondphasenberechnung
+    //
+    // Die Funktion bestimmt die Mondphase ohne Internetverbindung
+    // anhand einer astronomischen Näherung.
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    fun mondphaseGibtNonBlankStringZurueck() {
+        val ergebnis = mondphaseBerechnen("08.03.2026 15:50")
+        assertTrue("Mondphase darf nicht leer sein", ergebnis.isNotBlank())
+    }
+
+    @Test
+    fun mondphaseErkenntNeumondBeimReferenzdatum() {
+        // Der 6. Januar 2000 18:14 UTC war Neumond — direkt am Referenzdatum muss "Neumond" erscheinen.
+        val ergebnis = mondphaseBerechnen("06.01.2000 20:00")
+        assertEquals("Neumond", ergebnis)
+    }
+
+    @Test
+    fun mondphaseErkenntVollmond() {
+        // Ca. 15 Tage nach dem Referenz-Neumond (06.01.2000 18:14 UTC) → 21.01.2000 ~20:00 MEZ
+        val ergebnis = mondphaseBerechnen("21.01.2000 20:00")
+        assertEquals("Vollmond", ergebnis)
+    }
+
+    @Test
+    fun mondphaseUngueltigesDatumGibtLeerenStringZurueck() {
+        assertEquals("", mondphaseBerechnen("KEIN_DATUM"))
+    }
+
+    @Test
+    fun mondphaseZeigtTagesBisNaechstemEreignis() {
+        // Ein Datum in der zunehmenden Phase muss "X Tage bis Vollmond" liefern.
+        val ergebnis = mondphaseBerechnen("08.03.2026 15:50")
+        assertTrue("Ergebnis muss 'Tage bis' enthalten",
+            ergebnis.contains("Tage bis Vollmond") || ergebnis.contains("Tage bis Neumond")
+                    || ergebnis == "Vollmond" || ergebnis == "Neumond")
+    }
+
+    @Test
+    fun mondphaseVorVollmondEnthaeltTageszahl() {
+        // 7 Tage vor Vollmond (ca. Tag 7.77 im Mondzyklus) muss eine Tageszahl erscheinen.
+        // Referenz-Neumond + 7.77 Tage = 07.01.2000 + 7 Tage ≈ 14.01.2000 06:00 MEZ
+        val ergebnis = mondphaseBerechnen("14.01.2000 06:00")
+        assertTrue("Ergebnis muss eine Zahl und 'bis Vollmond' enthalten",
+            ergebnis.contains("bis Vollmond") && ergebnis[0].isDigit())
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 7. EXIF Datums-Format
     //
     // Kameras speichern das Datum als "yyyy:MM:dd HH:mm:ss".
     // Die App muss es in "dd.MM.yyyy HH:mm" (Berliner Zeit) umwandeln.

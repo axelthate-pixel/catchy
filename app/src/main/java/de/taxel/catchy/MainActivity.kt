@@ -21,8 +21,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -74,7 +72,8 @@ data class Fang(
     val luftdruck: Double = 0.0,
     val bewoelkung: Int = 0,                   // Bewölkung in Prozent (0–100)
     val fotoPfad: String = "",                 // Absoluter Dateipfad zum Foto, leer wenn keins vorhanden
-    val gezeiten: String = ""                  // Gezeitenstand zum Fangzeitpunkt (astronomische Näherung)
+    val gezeiten: String = "",                 // Gezeitenstand zum Fangzeitpunkt (astronomische Näherung)
+    val mondphase: String = ""                 // Mondphase zum Fangzeitpunkt (astronomische Näherung)
 )
 
 // Lädt alle gespeicherten Fänge aus den SharedPreferences und gibt sie absteigend nach Datum sortiert zurück
@@ -99,7 +98,8 @@ fun faengeladen(context: Context): List<Fang> {
             luftdruck = obj.optDouble("luftdruck", 0.0),
             bewoelkung = obj.optInt("bewoelkung", 0),
             fotoPfad = obj.optString("fotoPfad", ""),
-            gezeiten = obj.optString("gezeiten", "")
+            gezeiten = obj.optString("gezeiten", ""),
+            mondphase = obj.optString("mondphase", "")
         ))
     }
     // Neueste Fänge zuerst; bei ungültigem Datum wird epoch 0 als Fallback verwendet
@@ -127,6 +127,7 @@ fun fangspeichern(context: Context, fang: Fang) {
     obj.put("bewoelkung", fang.bewoelkung)
     obj.put("fotoPfad", fang.fotoPfad)
     obj.put("gezeiten", fang.gezeiten)
+    obj.put("mondphase", fang.mondphase)
     array.put(obj)
     prefs.edit().putString("faenge", array.toString()).apply()
 }
@@ -154,6 +155,7 @@ fun fangAktualisieren(context: Context, fang: Fang) {
             updated.put("bewoelkung", fang.bewoelkung)
             updated.put("fotoPfad", fang.fotoPfad)
             updated.put("gezeiten", fang.gezeiten)
+            updated.put("mondphase", fang.mondphase)
             neu.put(updated)
         } else neu.put(obj)
     }
@@ -313,29 +315,53 @@ fun gezeiteBerechnen(datum: String, lat: Double, lon: Double): String {
 
         // Semi-diurnale Gezeitenphase (T = 12h 25min 14s = 44714s)
         // Mittlerer Mondtag = 24h 50min 28s = 89428s → Phasenoffset nach Längengrad
+        // Phase: 0 = Hochwasser, 0.5 = Niedrigwasser, 1 = Hochwasser
         val tidePeriodSec = 44714.0
         val mondTagSec = 89428.0
         val lonOffset = (lon / 360.0) * mondTagSec
+        val normPhase = ((t + lonOffset) % tidePeriodSec).let { if (it < 0) it + tidePeriodSec else it } / tidePeriodSec
 
-        fun hoehe(time: Double): Double {
-            val phase = ((time + lonOffset) % tidePeriodSec) / tidePeriodSec
-            return Math.cos(2.0 * Math.PI * (if (phase < 0) phase + 1.0 else phase))
+        val (sekBis, ereignis) = if (normPhase < 0.5) {
+            Pair((0.5 - normPhase) * tidePeriodSec, "Ebbe")
+        } else {
+            Pair((1.0 - normPhase) * tidePeriodSec, "Flut")
         }
 
-        val h = hoehe(t)
-        val steigend = h > hoehe(t - 1800.0)
-
-        // Prozentangabe: wie weit ist die aktuelle Phase durchlaufen?
-        // Steigende Flut: 0 % = NW, 100 % = HW  →  (h + 1) / 2
-        // Fallende Ebbe:  0 % = HW, 100 % = NW  →  (1 - h) / 2
+        val stunden = Math.round(sekBis / 3600.0).toInt()
         val stand = when {
-            h > 0.85 -> "Hochwasser"
-            h < -0.85 -> "Niedrigwasser"
-            steigend -> "Steigende Flut ${((h + 1) / 2 * 100).toInt()} %"
-            else ->      "Fallende Ebbe ${((1 - h) / 2 * 100).toInt()} %"
+            stunden == 0 -> if (ereignis == "Flut") "Hochwasser" else "Niedrigwasser"
+            stunden == 1 -> "1 Stunde bis $ereignis"
+            else -> "$stunden Stunden bis $ereignis"
         }
 
         if (tideTyp.isNotBlank()) "$stand · $tideTyp" else stand
+    } catch (e: Exception) { "" }
+}
+
+// Berechnet Tage bis zum nächsten Vollmond oder Neumond (astronomische Näherung, kein Internet nötig)
+fun mondphaseBerechnen(datum: String): String {
+    return try {
+        val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
+        val date = sdf.parse(datum) ?: return ""
+        val t = date.time / 1000.0
+
+        // Mondphase: Tage seit bekanntem Neumond (6. Jan 2000, 18:14 UTC)
+        val refNeumond = 947182440.0
+        val lunarPeriodSec = 29.53058867 * 86400.0
+        var mondAlterTage = ((t - refNeumond) % lunarPeriodSec) / 86400.0
+        if (mondAlterTage < 0) mondAlterTage += 29.53058867
+
+        // Vollmond bei Tag ~14.77, Neumond bei Tag 0/29.53
+        val bisVollmond = 14.77 - mondAlterTage
+        val bisNeumond  = if (mondAlterTage < 14.77) mondAlterTage else 29.53058867 - mondAlterTage
+
+        when {
+            mondAlterTage < 1.0 || mondAlterTage > 28.53 -> "Neumond"
+            mondAlterTage in 14.27..15.27                 -> "Vollmond"
+            bisVollmond > 0 -> "${bisVollmond.toInt() + 1} Tage bis Vollmond"
+            else            -> "${bisNeumond.toInt() + 1} Tage bis Neumond"
+        }
     } catch (e: Exception) { "" }
 }
 
@@ -450,18 +476,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Haupt-Composable: verwaltet die Navigation zwischen den vier Screens der App
+// Haupt-Composable: verwaltet die Navigation zwischen den Screens der App
 @Composable
 fun AngelApp() {
-    var screen by remember { mutableStateOf("erfassung") }
-    var aktualisierung by remember { mutableStateOf(0) } // Zähler, der key() zwingt Screens neu zu bauen
-    var kartenFang by remember { mutableStateOf<Fang?>(null) }   // Fang, der in der Karte zentriert werden soll
-    var bearbeitenFang by remember { mutableStateOf<Fang?>(null) } // Fang, der im Bearbeiten-Screen geöffnet wird
-    // Merkt sich, von welchem Screen aus die Karte geöffnet wurde, damit "Zurück" korrekt navigiert
-    var vorherKartenScreen by remember { mutableStateOf("erfassung") }
-    // ID des Fangs, zu dem nach Rückkehr aus der Karte gescrollt werden soll (null = kein Scrollen)
+    var screen by remember { mutableStateOf("liste") }
+    var aktualisierung by remember { mutableStateOf(0) }
+    var kartenFang by remember { mutableStateOf<Fang?>(null) }
+    var bearbeitenFang by remember { mutableStateOf<Fang?>(null) }
+    var vorherKartenScreen by remember { mutableStateOf("liste") }
     var scrollZuFangId by remember { mutableStateOf<Long?>(null) }
-    // ID des bearbeiteten Fangs, zu dem nach Speichernscrollt werden soll
     var scrollZuBearbeiteterFangId by remember { mutableStateOf<Long?>(null) }
     when (screen) {
         "karte" -> key(aktualisierung) {
@@ -470,39 +493,18 @@ fun AngelApp() {
         "bearbeiten" -> bearbeitenFang?.let { fang ->
             FangBearbeiten(fang = fang, zeigeListeFuer = { fangId -> scrollZuBearbeiteterFangId = fangId; aktualisierung++; screen = "liste" })
         }
-        else -> {
-            // Pager für die zwei Haupt-Screens: Seite 0 = Fang erfassen, Seite 1 = Meine Fänge
-            val pagerState = rememberPagerState(
-                initialPage = if (screen == "liste") 1 else 0,
-                pageCount = { 2 }
+        "erfassung" -> FangErfassungScreen(
+            zeigeListeAn = { aktualisierung++; screen = "liste" },
+            zeigeKarteAn = { vorherKartenScreen = "erfassung"; aktualisierung++; screen = "karte" }
+        )
+        else -> key(aktualisierung) {
+            FangListe(
+                zeigeErfassungAn = { screen = "erfassung" },
+                zeigeKarteFuer = { fang -> kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte" },
+                zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
+                scrollZuFangId = scrollZuBearbeiteterFangId ?: scrollZuFangId,
+                onScrollZuFangIdVerbraucht = { scrollZuBearbeiteterFangId = null; scrollZuFangId = null }
             )
-            // Swipe-Geste → screen-State und FangListe-Aktualisierung
-            LaunchedEffect(pagerState.currentPage) {
-                screen = if (pagerState.currentPage == 1) "liste" else "erfassung"
-                if (pagerState.currentPage == 1) aktualisierung++ // FangListe beim Wechsel zu Seite 1 neu laden
-            }
-            // Button-Navigation → Pager animieren
-            LaunchedEffect(screen) {
-                val zielSeite = if (screen == "liste") 1 else 0
-                if (pagerState.currentPage != zielSeite) pagerState.animateScrollToPage(zielSeite)
-            }
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                when (page) {
-                    0 -> FangErfassungScreen(
-                        zeigeListeAn = { aktualisierung++; screen = "liste" },
-                        zeigeKarteAn = { vorherKartenScreen = "erfassung"; aktualisierung++; screen = "karte" }
-                    )
-                    1 -> key(aktualisierung) {
-                        FangListe(
-                            zurueck = { screen = "erfassung" },
-                            zeigeKarteFuer = { fang -> kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte" },
-                            zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
-                            scrollZuFangId = scrollZuBearbeiteterFangId ?: scrollZuFangId,
-                            onScrollZuFangIdVerbraucht = { scrollZuBearbeiteterFangId = null; scrollZuFangId = null }
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -521,8 +523,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     var aktuellesWetter by remember { mutableStateOf<Wetter?>(null) }
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     var fotoPfad by remember { mutableStateOf("") }
-    var importiertesDatum by remember { mutableStateOf("") }
-    var importMeldung by remember { mutableStateOf("") }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
     val datum = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
@@ -531,7 +531,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
         if (erfolg && tempFotoDatei != null) {
             fotoUri = Uri.fromFile(tempFotoDatei)
             fotoPfad = tempFotoDatei!!.absolutePath
-            importiertesDatum = ""
             fischart = "wird erkannt..."
             fischartErkennen(context, fotoPfad) { erkannteArt ->
                 fischart = if (erkannteArt.isNotBlank()) erkannteArt else ""
@@ -545,122 +544,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             tempFotoDatei = datei
             val uri = FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
             kameraLauncher.launch(uri)
-        }
-    }
-
-    val mediaBerechtigungsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ -> }
-
-    val galerieLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    mediaBerechtigungsLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
-                }
-            }
-            val uri = uris.first()
-            val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
-            fotoPfad = uriZuPfad(context, uri)
-            fotoUri = Uri.fromFile(File(fotoPfad))
-            fischart = "wird erkannt..."
-            fischartErkennen(context, fotoPfad) { erkannteArt ->
-                fischart = if (erkannteArt.isNotBlank()) erkannteArt else ""
-            }
-            if (exifDatum.isNotBlank()) {
-                importiertesDatum = exifDatum
-                gpsStatus = if (lat != 0.0) "${String.format("%.5f", lat)}, ${String.format("%.5f", lon)}" else "Kein GPS im Foto"
-                wetterStatus = if (lat != 0.0) "wird geladen..." else "Kein GPS verfügbar"
-                if (lat != 0.0) {
-                    aktuellePosition = Location("exif").apply { latitude = lat; longitude = lon }
-                    historischesWetterAbrufen(lat, lon, exifDatum) { wetter ->
-                        aktuellesWetter = wetter
-                        wetterStatus = if (wetter != null)
-                            "${wetter.temperatur}°C  |  Wind ${wetter.wind} m/s  |  ${wetter.bewoelkung}% Bewölkung"
-                        else "Nicht verfügbar"
-                    }
-                }
-            } else {
-                importiertesDatum = ""
-                gpsStatus = "Kein GPS im Foto"
-                wetterStatus = "Kein GPS verfügbar"
-            }
-            // ── Import-Statistik (synchron erfasst, bevor Threads starten) ───────
-            var erfolgreich = if (fotoPfad.isNotBlank()) 1 else 0
-            var fehlgeschlagen = if (fotoPfad.isBlank()) 1 else 0
-            var mitExif = if (exifDatum.isNotBlank()) 1 else 0
-            var mitGps = if (lat != 0.0) 1 else 0
-
-            // ── Weitere Fotos: direkt im Hintergrund gespeichert ─────────────────
-            for ((index, weitereUri) in uris.drop(1).withIndex()) {
-                val (exifDatum2, lat2, lon2) = exifDatenLesen(context, weitereUri)
-                val pfad2 = uriZuPfad(context, weitereUri, index + 1)
-                val verwendetesDatum2 = if (exifDatum2.isNotBlank()) exifDatum2 else datum
-                if (pfad2.isNotBlank()) {
-                    erfolgreich++
-                    if (exifDatum2.isNotBlank()) mitExif++
-                    if (lat2 != 0.0) mitGps++
-                    val fangId = System.currentTimeMillis() + index + 1
-                    // Alles in einem Hintergrund-Thread: Wetter wird synchron geholt BEVOR
-                    // der Fang gespeichert wird — so gibt es keine Race Condition mehr
-                    thread {
-                        val wetter: Wetter? = if (lat2 != 0.0) {
-                            try {
-                                val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
-                                    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum2) ?: Date()
-                                )
-                                val url = "https://archive-api.open-meteo.com/v1/archive?latitude=${String.format(Locale.US, "%.6f", lat2)}&longitude=${String.format(Locale.US, "%.6f", lon2)}&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
-                                val response = URL(url).readText()
-                                val json = JSONObject(response)
-                                val hourly = json.getJSONObject("hourly")
-                                Wetter(
-                                    temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
-                                    wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
-                                    luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
-                                    bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
-                                )
-                            } catch (e: Exception) { null }
-                        } else null
-                        // Fang mit vollständigen Wetter- und Gezeitendaten speichern
-                        fangspeichern(context, Fang(
-                            id = fangId,
-                            fischart = "wird erkannt...",
-                            laenge = "",
-                            notizen = "Aus Galerie importiert",
-                            datum = verwendetesDatum2,
-                            latitude = lat2,
-                            longitude = lon2,
-                            temperatur = wetter?.temperatur ?: 0.0,
-                            wind = wetter?.wind ?: 0.0,
-                            luftdruck = wetter?.luftdruck ?: 0.0,
-                            bewoelkung = wetter?.bewoelkung ?: 0,
-                            fotoPfad = pfad2,
-                            gezeiten = gezeiteBerechnen(verwendetesDatum2, lat2, lon2)
-                        ))
-                        // Fischart ist der einzige verbleibende async-Schritt — Wetter ist bereits gespeichert
-                        fischartErkennen(context, pfad2) { erkannteArt ->
-                            val gespeicherter = faengeladen(context).find { it.id == fangId }
-                            if (gespeicherter != null) {
-                                fangAktualisieren(context, gespeicherter.copy(
-                                    fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
-                                ))
-                            }
-                        }
-                    }
-                } else {
-                    fehlgeschlagen++
-                }
-            }
-
-            // ── Import-Meldung zusammenstellen ───────────────────────────────────
-            val gesamt = uris.size
-            importMeldung = buildString {
-                if (gesamt == 1) {
-                    append(if (erfolgreich == 1) "Foto importiert" else "Import fehlgeschlagen")
-                } else {
-                    append("$erfolgreich von $gesamt Fotos importiert")
-                    if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
-                }
-                append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
-            }
         }
     }
 
@@ -704,13 +587,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
         else berechtigungsLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
     }
 
-    LaunchedEffect(importiertesDatum) {
-        if (importiertesDatum.isBlank()) {
-            val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            if (hatBerechtigung) gpsUndWetterAbrufen()
-        }
-    }
-
     Column(
         modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -719,28 +595,15 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             Text("Fang erfassen", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = zeigeKarteAn) { Text("Karte") }
-                Button(onClick = zeigeListeAn) { Text("Liste") }
+                Button(onClick = zeigeListeAn) { Text("Zurück") }
             }
         }
-        val angezeigtesDatum = if (importiertesDatum.isNotBlank()) importiertesDatum else datum
+        val angezeigtesDatum = datum
         Text(angezeigtesDatum, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { fotoAufnehmen() }, modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
             ) { Text(if (fotoUri != null) "Neu aufnehmen" else "Foto aufnehmen") }
-            Button(onClick = { galerieLauncher.launch("image/*") }, modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
-            ) { Text("Aus Galerie") }
-        }
-        if (importiertesDatum.isNotBlank()) {
-            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
-                Text("Foto importiert — Datum und GPS aus EXIF übernommen", modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp)
-            }
-        }
-        if (importMeldung.isNotBlank()) {
-            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
-                Text(importMeldung, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp)
-            }
         }
         if (fotoUri != null) {
             Image(painter = rememberAsyncImagePainter(fotoUri), contentDescription = "Fang Foto",
@@ -759,7 +622,7 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                     Text("Wetter:", fontWeight = FontWeight.Medium)
                     Text(wetterStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                 }
-                val angezeigtesDatumFuerTide = if (importiertesDatum.isNotBlank()) importiertesDatum else datum
+                val angezeigtesDatumFuerTide = datum
                 val gezeitenStatus = if (aktuellePosition != null)
                     gezeiteBerechnen(angezeigtesDatumFuerTide, aktuellePosition!!.latitude, aktuellePosition!!.longitude)
                 else ""
@@ -769,11 +632,18 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                         Text(gezeitenStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
                     }
                 }
+                val mondphaseStatus = mondphaseBerechnen(angezeigtesDatumFuerTide)
+                if (mondphaseStatus.isNotBlank()) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Mond:", fontWeight = FontWeight.Medium)
+                        Text(mondphaseStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                    }
+                }
             }
         }
         Button(
             onClick = {
-                val verwendetesDatum = if (importiertesDatum.isNotBlank()) importiertesDatum else datum
+                val verwendetesDatum = datum
                 val lat = aktuellePosition?.latitude ?: 0.0
                 val lon = aktuellePosition?.longitude ?: 0.0
                 fangspeichern(context, Fang(
@@ -785,10 +655,11 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                     luftdruck = aktuellesWetter?.luftdruck ?: 0.0,
                     bewoelkung = aktuellesWetter?.bewoelkung ?: 0,
                     fotoPfad = fotoPfad,
-                    gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon)
+                    gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
+                    mondphase = mondphaseBerechnen(verwendetesDatum)
                 ))
                 gespeichert = true
-                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""; importiertesDatum = ""; importMeldung = ""
+                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
@@ -920,7 +791,8 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                     luftdruck = wetterObjekt?.luftdruck ?: fang.luftdruck,
                     bewoelkung = wetterObjekt?.bewoelkung ?: fang.bewoelkung,
                     fotoPfad = fotoPfad,
-                    gezeiten = gezeiteBerechnen(datum, lat, lon)
+                    gezeiten = gezeiteBerechnen(datum, lat, lon),
+                    mondphase = mondphaseBerechnen(datum)
                 ))
                 zeigeListeFuer(fang.id)
             },
@@ -933,7 +805,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
 // Screen mit der scrollbaren Liste aller Fänge; bietet Backup/Import/GPX-Export und Navigation zur Karte
 @Composable
 fun FangListe(
-    zurueck: () -> Unit,
+    zeigeErfassungAn: () -> Unit,
     zeigeKarteFuer: (Fang) -> Unit,
     zeigeBearbeitenFuer: (Fang) -> Unit,
     // Nach Rückkehr von der Karte: ID des Fangs, zu dem gescrollt werden soll
@@ -967,48 +839,161 @@ fun FangListe(
         }
     }
 
+    var menuExpanded by remember { mutableStateOf(false) }
+    val datum = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
+    var pendingGalerieUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+
+    fun galerieImportStarten(uris: List<Uri>) {
+        var erfolgreich = 0
+        var fehlgeschlagen = 0
+        var mitExif = 0
+        var mitGps = 0
+
+        for ((index, uri) in uris.withIndex()) {
+            val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
+            val pfad = uriZuPfad(context, uri, index)
+            val verwendetesDatum = if (exifDatum.isNotBlank()) exifDatum else datum
+            if (pfad.isNotBlank()) {
+                erfolgreich++
+                if (exifDatum.isNotBlank()) mitExif++
+                if (lat != 0.0) mitGps++
+                val fangId = System.currentTimeMillis() + index
+                thread {
+                    val wetter: Wetter? = if (lat != 0.0) {
+                        try {
+                            val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
+                                SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum) ?: Date()
+                            )
+                            val url = "https://archive-api.open-meteo.com/v1/archive?latitude=${String.format(Locale.US, "%.6f", lat)}&longitude=${String.format(Locale.US, "%.6f", lon)}&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                            val response = URL(url).readText()
+                            val json = JSONObject(response)
+                            val hourly = json.getJSONObject("hourly")
+                            Wetter(
+                                temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
+                                wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
+                                luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
+                                bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
+                            )
+                        } catch (e: Exception) { null }
+                    } else null
+                    fangspeichern(context, Fang(
+                        id = fangId,
+                        fischart = "wird erkannt...",
+                        laenge = "",
+                        notizen = "Aus Galerie importiert",
+                        datum = verwendetesDatum,
+                        latitude = lat,
+                        longitude = lon,
+                        temperatur = wetter?.temperatur ?: 0.0,
+                        wind = wetter?.wind ?: 0.0,
+                        luftdruck = wetter?.luftdruck ?: 0.0,
+                        bewoelkung = wetter?.bewoelkung ?: 0,
+                        fotoPfad = pfad,
+                        gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
+                        mondphase = mondphaseBerechnen(verwendetesDatum)
+                    ))
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        faenge = faengeladen(context)
+                    }
+                    fischartErkennen(context, pfad) { erkannteArt ->
+                        val gespeicherter = faengeladen(context).find { it.id == fangId }
+                        if (gespeicherter != null) {
+                            fangAktualisieren(context, gespeicherter.copy(
+                                fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
+                            ))
+                        }
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            faenge = faengeladen(context)
+                        }
+                    }
+                }
+            } else {
+                fehlgeschlagen++
+            }
+        }
+
+        val gesamt = uris.size
+        exportMeldung = buildString {
+            if (gesamt == 1) {
+                append(if (erfolgreich == 1) "Foto importiert" else "Import fehlgeschlagen")
+            } else {
+                append("$erfolgreich von $gesamt Fotos importiert")
+                if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
+            }
+            append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
+        }
+    }
+
+    val mediaBerechtigungsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+        val uris = pendingGalerieUris
+        if (uris.isNotEmpty()) {
+            pendingGalerieUris = emptyList()
+            galerieImportStarten(uris)
+        }
+    }
+
+    val galerieLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                    pendingGalerieUris = uris
+                    mediaBerechtigungsLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                    return@rememberLauncherForActivityResult
+                }
+            }
+            galerieImportStarten(uris)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Meine Fänge", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Button(onClick = zurueck) { Text("Zurück") }
+            Box {
+                TextButton(onClick = { menuExpanded = true }) { Text("☰", fontSize = 22.sp) }
+                DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                    DropdownMenuItem(text = { Text("Backup") }, onClick = {
+                        menuExpanded = false
+                        val uri = datenExportieren(context)
+                        if (uri != null) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/json"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "Backup teilen"))
+                        } else exportMeldung = "Export fehlgeschlagen"
+                    })
+                    DropdownMenuItem(text = { Text("Import") }, onClick = {
+                        menuExpanded = false
+                        importLauncher.launch("application/json")
+                    })
+                    DropdownMenuItem(text = { Text("GPX Export") }, onClick = {
+                        menuExpanded = false
+                        val uri = gpxExportieren(context, faenge)
+                        if (uri != null) {
+                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                type = "application/gpx+xml"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(intent, "GPX teilen"))
+                        } else exportMeldung = "GPX Export fehlgeschlagen"
+                    })
+                }
+            }
         }
         Spacer(modifier = Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = {
-                    val uri = datenExportieren(context)
-                    if (uri != null) {
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/json"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "Backup teilen"))
-                    } else exportMeldung = "Export fehlgeschlagen"
-                },
+                onClick = { zeigeErfassungAn() },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
-            ) { Text("Backup") }
+            ) { Text("Foto aufnehmen") }
             Button(
-                onClick = { importLauncher.launch("application/json") },
+                onClick = { galerieLauncher.launch("image/*") },
                 modifier = Modifier.weight(1f),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
-            ) { Text("Import") }
-            Button(
-                onClick = {
-                    val uri = gpxExportieren(context, faenge)
-                    if (uri != null) {
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "application/gpx+xml"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "GPX teilen"))
-                    } else exportMeldung = "GPX Export fehlgeschlagen"
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
-            ) { Text("GPX->") }
+            ) { Text("Aus Galerie") }
         }
         if (exportMeldung.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
@@ -1035,6 +1020,7 @@ fun FangListe(
                             if (fang.notizen.isNotBlank()) Text("Notizen: ${fang.notizen}", fontSize = 14.sp)
                             if (fang.temperatur != 0.0) Text("${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (fang.gezeiten.isNotBlank()) Text("Tide: ${fang.gezeiten}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (fang.mondphase.isNotBlank()) Text("Mond: ${fang.mondphase}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (fang.latitude != 0.0) Text("GPS: ${String.format("%.4f", fang.latitude)}, ${String.format("%.4f", fang.longitude)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Row {
                                 TextButton(onClick = { zeigeBearbeitenFuer(fang) }) { Text("Bearbeiten") }
