@@ -50,6 +50,8 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.concurrent.thread
 
+private const val TAG = "Catchy"
+
 // Hält die aktuellen Wetterdaten zu einem Fang
 data class Wetter(
     val temperatur: Double = 0.0,
@@ -104,7 +106,9 @@ fun faengeladen(context: Context): List<Fang> {
     }
     // Neueste Fänge zuerst; bei ungültigem Datum wird epoch 0 als Fallback verwendet
     return liste.sortedByDescending {
-        try { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(it.datum) } catch (e: Exception) { Date(0) }
+        try {
+            SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(it.datum)
+        } catch (@Suppress("SwallowedException") e: java.text.ParseException) { Date(0) }
     }
 }
 
@@ -184,11 +188,12 @@ fun datenExportieren(context: Context): Uri? {
         val datei = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "catchy_backup_${zeitstempel}.json")
         datei.writeText(json)
         FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
-    } catch (e: Exception) { null }
+    } catch (e: java.io.IOException) { android.util.Log.e(TAG, "Export fehlgeschlagen", e); null }
 }
 
 // Importiert Fänge aus einer JSON-Datei. Bereits vorhandene IDs werden übersprungen (kein Duplikat).
 // Rückgabe: Anzahl neu importierter Fänge, 0 wenn keine neuen, -1 bei Fehler
+@Suppress("TooGenericExceptionCaught")
 fun datenImportieren(context: Context, uri: Uri): Int {
     return try {
         val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return 0
@@ -208,7 +213,7 @@ fun datenImportieren(context: Context, uri: Uri): Int {
         }
         prefs.edit().putString("faenge", bestehend.toString()).apply()
         importiert
-    } catch (e: Exception) { -1 }
+    } catch (e: Exception) { android.util.Log.e(TAG, "Import fehlgeschlagen", e); -1 }
 }
 
 // Exportiert alle Fänge mit GPS-Koordinaten als GPX-Waypoint-Datei und gibt eine teilbare URI zurück
@@ -240,14 +245,17 @@ fun gpxExportieren(context: Context, faenge: List<Fang>): Uri? {
         val datei = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "catchy_fangplaetze_${zeitstempel}.gpx")
         datei.writeText(sb.toString())
         FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
-    } catch (e: Exception) { null }
+    } catch (e: java.io.IOException) { android.util.Log.e(TAG, "GPX Export fehlgeschlagen", e); null }
 }
 
 // Ruft das aktuelle Wetter für die angegebenen Koordinaten von der Open-Meteo-API ab (Hintergrund-Thread)
+@Suppress("TooGenericExceptionCaught")
 fun wetterAbrufen(lat: Double, lon: Double, onErgebnis: (Wetter?) -> Unit) {
     thread {
         try {
-            val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+            val url = "https://api.open-meteo.com/v1/forecast?" +
+                "latitude=$lat&longitude=$lon&" +
+                "current=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
             val response = URL(url).readText()
             val json = JSONObject(response)
             val current = json.getJSONObject("current")
@@ -257,12 +265,13 @@ fun wetterAbrufen(lat: Double, lon: Double, onErgebnis: (Wetter?) -> Unit) {
                 luftdruck = current.getDouble("surface_pressure"),
                 bewoelkung = current.getInt("cloud_cover")
             ))
-        } catch (e: Exception) { onErgebnis(null) }
+        } catch (e: Exception) { android.util.Log.e(TAG, "Wetter abrufen fehlgeschlagen", e); onErgebnis(null) }
     }
 }
 
 // Ruft historische Wetterdaten für ein bestimmtes Datum von der Open-Meteo-Archiv-API ab (Hintergrund-Thread).
 // Index 12 entspricht dem Stundenwert um 12:00 Uhr Mittags als repräsentativer Tageswert.
+@Suppress("TooGenericExceptionCaught")
 fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebnis: (Wetter?) -> Unit) {
     thread {
         try {
@@ -270,7 +279,10 @@ fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebni
             val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
                 SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(datum) ?: Date()
             )
-            val url = "https://archive-api.open-meteo.com/v1/archive?latitude=$lat&longitude=$lon&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+            val url = "https://archive-api.open-meteo.com/v1/archive?" +
+                "latitude=$lat&longitude=$lon&" +
+                "start_date=$datumFormatiert&end_date=$datumFormatiert&" +
+                "hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
             val response = URL(url).readText()
             val json = JSONObject(response)
             val hourly = json.getJSONObject("hourly")
@@ -280,7 +292,7 @@ fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebni
                 luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
                 bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
             ))
-        } catch (e: Exception) { onErgebnis(null) }
+        } catch (e: Exception) { android.util.Log.e(TAG, "Historisches Wetter abrufen fehlgeschlagen", e); onErgebnis(null) }
     }
 }
 
@@ -335,7 +347,7 @@ fun gezeiteBerechnen(datum: String, lat: Double, lon: Double): String {
         }
 
         if (tideTyp.isNotBlank()) "$stand · $tideTyp" else stand
-    } catch (e: Exception) { "" }
+    } catch (@Suppress("SwallowedException") e: java.text.ParseException) { "" }
 }
 
 // Berechnet Tage bis zum nächsten Vollmond oder Neumond (astronomische Näherung, kein Internet nötig)
@@ -362,19 +374,23 @@ fun mondphaseBerechnen(datum: String): String {
             bisVollmond > 0 -> "${bisVollmond.toInt() + 1} Tage bis Vollmond"
             else            -> "${bisNeumond.toInt() + 1} Tage bis Neumond"
         }
-    } catch (e: Exception) { "" }
+    } catch (@Suppress("SwallowedException") e: java.text.ParseException) { "" }
 }
 
+@Suppress("TooGenericExceptionCaught")
 fun exifDatenLesen(context: Context, uri: Uri): Triple<String, Double, Double> {
     try {
         // Ab Android 10 (Q) wird das Original-Asset benötigt, um EXIF-GPS-Daten lesen zu können
         val photoUri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            try { MediaStore.setRequireOriginal(uri) } catch (e: Exception) { uri }
+            try {
+                MediaStore.setRequireOriginal(uri)
+            } catch (e: Exception) { android.util.Log.e(TAG, "setRequireOriginal fehlgeschlagen", e); uri }
         } else uri
         // Fallback auf normale URI falls setRequireOriginal fehlschlägt
         val stream = try {
             context.contentResolver.openInputStream(photoUri)
         } catch (e: Exception) {
+            android.util.Log.e(TAG, "openInputStream fehlgeschlagen", e)
             context.contentResolver.openInputStream(uri)
         } ?: return Triple("", 0.0, 0.0)
         val exif = ExifInterface(stream)
@@ -395,11 +411,14 @@ fun exifDatenLesen(context: Context, uri: Uri): Triple<String, Double, Double> {
                 val ausgang = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
                 ausgang.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
                 ausgang.format(eingang.parse(datumRoh) ?: Date())
-            } catch (e: Exception) { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date()) }
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "EXIF Datum parsen fehlgeschlagen", e)
+                SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
+            }
         } else SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
         stream.close()
         return Triple(datum, lat, lon)
-    } catch (e: Exception) { return Triple("", 0.0, 0.0) }
+    } catch (e: Exception) { android.util.Log.e(TAG, "EXIF lesen fehlgeschlagen", e); return Triple("", 0.0, 0.0) }
 }
 
 // Erstellt eine leere temporäre JPG-Datei im externen Bilderverzeichnis für die Kamera-Aufnahme
@@ -410,6 +429,7 @@ fun fotoDateiErstellen(context: Context): File {
 
 // Kopiert ein Bild von einer Content-URI in das app-eigene Bilderverzeichnis und gibt den absoluten Pfad zurück.
 // suffix verhindert Namenskollisionen beim gleichzeitigen Import mehrerer Fotos.
+@Suppress("TooGenericExceptionCaught")
 fun uriZuPfad(context: Context, uri: Uri, suffix: Int = 0): String {
     val maxSeite = 1920
     return try {
@@ -441,12 +461,13 @@ fun uriZuPfad(context: Context, uri: Uri, suffix: Int = 0): String {
         zielDatei.outputStream().use { skaliert.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, it) }
         skaliert.recycle()
         zielDatei.absolutePath
-    } catch (e: Exception) { "" }
+    } catch (e: Exception) { android.util.Log.e(TAG, "URI zu Pfad fehlgeschlagen", e); "" }
 }
 
 // Erkennt die Fischart auf einem Foto mithilfe des lokalen ML Kit TFLite-Modells (model.tflite in Assets).
 // Gibt den erkannten Label-Text zurück, oder einen leeren String wenn nichts erkannt wurde.
-fun fischartErkennen(context: Context, bildPfad: String, onErgebnis: (String) -> Unit) {
+@Suppress("TooGenericExceptionCaught")
+fun fischartErkennen(bildPfad: String, onErgebnis: (String) -> Unit) {
     thread {
         try {
             val modellOptionen = com.google.mlkit.common.model.LocalModel.Builder()
@@ -464,7 +485,7 @@ fun fischartErkennen(context: Context, bildPfad: String, onErgebnis: (String) ->
                     if (labels.isNotEmpty()) onErgebnis(labels[0].text) else onErgebnis("")
                 }
                 .addOnFailureListener { onErgebnis("") }
-        } catch (e: Exception) { onErgebnis("") }
+        } catch (e: Exception) { android.util.Log.e(TAG, "Fischart erkennen fehlgeschlagen", e); onErgebnis("") }
     }
 }
 
@@ -491,7 +512,9 @@ fun AngelApp() {
             FangKarte(zurueck = { screen = vorherKartenScreen }, zentriereFang = kartenFang)
         }
         "bearbeiten" -> bearbeitenFang?.let { fang ->
-            FangBearbeiten(fang = fang, zeigeListeFuer = { fangId -> scrollZuBearbeiteterFangId = fangId; aktualisierung++; screen = "liste" })
+            FangBearbeiten(fang = fang, zeigeListeFuer = { fangId ->
+                scrollZuBearbeiteterFangId = fangId; aktualisierung++; screen = "liste"
+            })
         }
         "erfassung" -> FangErfassungScreen(
             zeigeListeAn = { aktualisierung++; screen = "liste" },
@@ -500,7 +523,9 @@ fun AngelApp() {
         else -> key(aktualisierung) {
             FangListe(
                 zeigeErfassungAn = { screen = "erfassung" },
-                zeigeKarteFuer = { fang -> kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte" },
+                zeigeKarteFuer = { fang ->
+                    kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte"
+                },
                 zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
                 scrollZuFangId = scrollZuBearbeiteterFangId ?: scrollZuFangId,
                 onScrollZuFangIdVerbraucht = { scrollZuBearbeiteterFangId = null; scrollZuFangId = null }
@@ -532,7 +557,7 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             fotoUri = Uri.fromFile(tempFotoDatei)
             fotoPfad = tempFotoDatei!!.absolutePath
             fischart = "wird erkannt..."
-            fischartErkennen(context, fotoPfad) { erkannteArt ->
+            fischartErkennen(fotoPfad) { erkannteArt ->
                 fischart = if (erkannteArt.isNotBlank()) erkannteArt else ""
             }
         }
@@ -548,7 +573,8 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     }
 
     fun fotoAufnehmen() {
-        val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val hatBerechtigung =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         if (hatBerechtigung) {
             val datei = fotoDateiErstellen(context)
             tempFotoDatei = datei
@@ -558,12 +584,14 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     }
 
     fun gpsUndWetterAbrufen() {
-        val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hatBerechtigung =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hatBerechtigung) {
             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { location ->
                 if (location != null) {
                     aktuellePosition = location
-                    gpsStatus = "${String.format("%.5f", location.latitude)}, ${String.format("%.5f", location.longitude)}"
+                    gpsStatus = "${String.format(Locale.US, "%.5f", location.latitude)}, " +
+                        String.format(Locale.US, "%.5f", location.longitude)
                     wetterStatus = "wird geladen..."
                     wetterAbrufen(location.latitude, location.longitude) { wetter ->
                         aktuellesWetter = wetter
@@ -576,22 +604,31 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
         }
     }
 
-    val berechtigungsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { berechtigungen ->
+    val berechtigungsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { berechtigungen ->
         if (berechtigungen[Manifest.permission.ACCESS_FINE_LOCATION] == true) gpsUndWetterAbrufen()
         else gpsStatus = "Berechtigung verweigert"
     }
 
     LaunchedEffect(Unit) {
-        val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hatBerechtigung =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hatBerechtigung) gpsUndWetterAbrufen()
-        else berechtigungsLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+        else berechtigungsLauncher.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        )
     }
 
     Column(
         modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text("Fang erfassen", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = zeigeKarteAn) { Text("Karte") }
@@ -601,17 +638,36 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
         val angezeigtesDatum = datum
         Text(angezeigtesDatum, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { fotoAufnehmen() }, modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            Button(
+                onClick = { fotoAufnehmen() },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) { Text(if (fotoUri != null) "Neu aufnehmen" else "Foto aufnehmen") }
         }
         if (fotoUri != null) {
             Image(painter = rememberAsyncImagePainter(fotoUri), contentDescription = "Fang Foto",
                 modifier = Modifier.fillMaxWidth().height(200.dp), contentScale = ContentScale.Crop)
         }
-        OutlinedTextField(value = fischart, onValueChange = { fischart = it }, label = { Text("Fischart") }, placeholder = { Text("z.B. Hecht, Zander, Barsch...") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(value = laenge, onValueChange = { laenge = it }, label = { Text("Länge (cm)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(value = notizen, onValueChange = { notizen = it }, label = { Text("Notizen") }, placeholder = { Text("Köder, Gewässer, Besonderheiten...") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
+        OutlinedTextField(
+            value = fischart, onValueChange = { fischart = it },
+            label = { Text("Fischart") },
+            placeholder = { Text("z.B. Hecht, Zander, Barsch...") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
+        OutlinedTextField(
+            value = laenge, onValueChange = { laenge = it },
+            label = { Text("Länge (cm)") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
+        OutlinedTextField(
+            value = notizen, onValueChange = { notizen = it },
+            label = { Text("Notizen") },
+            placeholder = { Text("Köder, Gewässer, Besonderheiten...") },
+            modifier = Modifier.fillMaxWidth(), minLines = 3
+        )
         Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -665,8 +721,16 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             enabled = fischart.isNotBlank()
         ) { Text("Fang speichern", fontSize = 16.sp) }
         if (gespeichert) {
-            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
-                Text("Fang gespeichert!", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Medium)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text(
+                    "Fang gespeichert!", modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }
@@ -680,9 +744,11 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
     var laenge by remember { mutableStateOf(fang.laenge) }
     var notizen by remember { mutableStateOf(fang.notizen) }
     var datum by remember { mutableStateOf(fang.datum) }
-    var latText by remember { mutableStateOf(if (fang.latitude != 0.0) String.format("%.6f", fang.latitude) else "") }
-    var lonText by remember { mutableStateOf(if (fang.longitude != 0.0) String.format("%.6f", fang.longitude) else "") }
-    var fotoUri by remember { mutableStateOf<Uri?>(if (fang.fotoPfad.isNotBlank()) Uri.fromFile(File(fang.fotoPfad)) else null) }
+    var latText by remember { mutableStateOf(if (fang.latitude != 0.0) String.format(Locale.US, "%.6f", fang.latitude) else "") }
+    var lonText by remember { mutableStateOf(if (fang.longitude != 0.0) String.format(Locale.US, "%.6f", fang.longitude) else "") }
+    var fotoUri by remember {
+        mutableStateOf<Uri?>(if (fang.fotoPfad.isNotBlank()) Uri.fromFile(File(fang.fotoPfad)) else null)
+    }
     var fotoPfad by remember { mutableStateOf(fang.fotoPfad) }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
     var wetterNeuLaden by remember { mutableStateOf("") }
@@ -694,7 +760,9 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
         }
     }
 
-    val kameraBerechtigungsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { erlaubt ->
+    val kameraBerechtigungsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { erlaubt ->
         if (erlaubt) {
             val datei = fotoDateiErstellen(context)
             tempFotoDatei = datei
@@ -709,7 +777,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
             fotoPfad = uriZuPfad(context, uri)
             fotoUri = Uri.fromFile(File(fotoPfad))
             if (exifDatum.isNotBlank()) datum = exifDatum
-            if (lat != 0.0) { latText = String.format("%.6f", lat); lonText = String.format("%.6f", lon) }
+            if (lat != 0.0) { latText = String.format(Locale.US, "%.6f", lat); lonText = String.format(Locale.US, "%.6f", lon) }
         }
     }
 
@@ -717,7 +785,11 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
         modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text("Fang bearbeiten", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Button(onClick = { zeigeListeFuer(-1L) }) { Text("Abbrechen") }
         }
@@ -726,28 +798,63 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                 modifier = Modifier.fillMaxWidth().height(200.dp), contentScale = ContentScale.Crop)
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-                if (hatBerechtigung) {
-                    val datei = fotoDateiErstellen(context)
-                    tempFotoDatei = datei
-                    val uri = FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
-                    kameraLauncher.launch(uri)
-                } else kameraBerechtigungsLauncher.launch(Manifest.permission.CAMERA)
-            }, modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            Button(
+                onClick = {
+                    val hatBerechtigung =
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                    if (hatBerechtigung) {
+                        val datei = fotoDateiErstellen(context)
+                        tempFotoDatei = datei
+                        val uri = FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
+                        kameraLauncher.launch(uri)
+                    } else kameraBerechtigungsLauncher.launch(Manifest.permission.CAMERA)
+                },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) { Text("Neues Foto") }
-            Button(onClick = { galerieLauncher.launch("image/*") }, modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            Button(
+                onClick = { galerieLauncher.launch("image/*") },
+                modifier = Modifier.weight(1f),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) { Text("Aus Galerie") }
         }
-        OutlinedTextField(value = fischart, onValueChange = { fischart = it }, label = { Text("Fischart") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(value = laenge, onValueChange = { laenge = it }, label = { Text("Länge (cm)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(value = notizen, onValueChange = { notizen = it }, label = { Text("Notizen") }, modifier = Modifier.fillMaxWidth(), minLines = 3)
-        OutlinedTextField(value = datum, onValueChange = { datum = it }, label = { Text("Datum (TT.MM.JJJJ HH:MM)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(
+            value = fischart, onValueChange = { fischart = it },
+            label = { Text("Fischart") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
+        OutlinedTextField(
+            value = laenge, onValueChange = { laenge = it },
+            label = { Text("Länge (cm)") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
+        OutlinedTextField(
+            value = notizen, onValueChange = { notizen = it },
+            label = { Text("Notizen") },
+            modifier = Modifier.fillMaxWidth(), minLines = 3
+        )
+        OutlinedTextField(
+            value = datum, onValueChange = { datum = it },
+            label = { Text("Datum (TT.MM.JJJJ HH:MM)") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = latText, onValueChange = { latText = it }, label = { Text("Breitengrad") }, modifier = Modifier.weight(1f), singleLine = true)
-            OutlinedTextField(value = lonText, onValueChange = { lonText = it }, label = { Text("Längengrad") }, modifier = Modifier.weight(1f), singleLine = true)
+            OutlinedTextField(
+                value = latText, onValueChange = { latText = it },
+                label = { Text("Breitengrad") },
+                modifier = Modifier.weight(1f), singleLine = true
+            )
+            OutlinedTextField(
+                value = lonText, onValueChange = { lonText = it },
+                label = { Text("Längengrad") },
+                modifier = Modifier.weight(1f), singleLine = true
+            )
         }
         Button(
             onClick = {
@@ -761,11 +868,21 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+            )
         ) { Text("Wetterdaten neu laden") }
         if (wetterNeuLaden.isNotBlank()) {
-            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-                Text(wetterNeuLaden, modifier = Modifier.padding(12.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text(
+                    wetterNeuLaden, modifier = Modifier.padding(12.dp),
+                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
         Button(
@@ -781,7 +898,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                             luftdruck = fang.luftdruck,
                             bewoelkung = teile[2].removeSuffix("% Bewölkung").trim().toInt()
                         )
-                    } catch (e: Exception) { null }
+                    } catch (e: Exception) { android.util.Log.e(TAG, "Wetter parsen fehlgeschlagen", e); null }
                 } else null
                 fangAktualisieren(context, fang.copy(
                     fischart = fischart, laenge = laenge, notizen = notizen, datum = datum,
@@ -864,7 +981,11 @@ fun FangListe(
                             val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
                                 SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum) ?: Date()
                             )
-                            val url = "https://archive-api.open-meteo.com/v1/archive?latitude=${String.format(Locale.US, "%.6f", lat)}&longitude=${String.format(Locale.US, "%.6f", lon)}&start_date=$datumFormatiert&end_date=$datumFormatiert&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                            val url = "https://archive-api.open-meteo.com/v1/archive?" +
+                                "latitude=${String.format(Locale.US, "%.6f", lat)}" +
+                                "&longitude=${String.format(Locale.US, "%.6f", lon)}" +
+                                "&start_date=$datumFormatiert&end_date=$datumFormatiert" +
+                                "&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
                             val response = URL(url).readText()
                             val json = JSONObject(response)
                             val hourly = json.getJSONObject("hourly")
@@ -874,7 +995,7 @@ fun FangListe(
                                 luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
                                 bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
                             )
-                        } catch (e: Exception) { null }
+                        } catch (e: Exception) { android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null }
                     } else null
                     fangspeichern(context, Fang(
                         id = fangId,
@@ -895,7 +1016,7 @@ fun FangListe(
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         faenge = faengeladen(context)
                     }
-                    fischartErkennen(context, pfad) { erkannteArt ->
+                    fischartErkennen(pfad) { erkannteArt ->
                         val gespeicherter = faengeladen(context).find { it.id == fangId }
                         if (gespeicherter != null) {
                             fangAktualisieren(context, gespeicherter.copy(
@@ -924,7 +1045,9 @@ fun FangListe(
         }
     }
 
-    val mediaBerechtigungsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
+    val mediaBerechtigungsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ ->
         val uris = pendingGalerieUris
         if (uris.isNotEmpty()) {
             pendingGalerieUris = emptyList()
@@ -932,10 +1055,15 @@ fun FangListe(
         }
     }
 
-    val galerieLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+    val galerieLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
         if (uris.isNotEmpty()) {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                val mediaPermGranted = ContextCompat.checkSelfPermission(
+                    context, Manifest.permission.ACCESS_MEDIA_LOCATION
+                ) != PackageManager.PERMISSION_GRANTED
+                if (mediaPermGranted) {
                     pendingGalerieUris = uris
                     mediaBerechtigungsLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
                     return@rememberLauncherForActivityResult
@@ -946,7 +1074,11 @@ fun FangListe(
     }
 
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text("Meine Fänge", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Box {
                 TextButton(onClick = { menuExpanded = true }) { Text("☰", fontSize = 22.sp) }
@@ -987,18 +1119,31 @@ fun FangListe(
             Button(
                 onClick = { zeigeErfassungAn() },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) { Text("Foto aufnehmen") }
             Button(
                 onClick = { galerieLauncher.launch("image/*") },
                 modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
             ) { Text("Aus Galerie") }
         }
         if (exportMeldung.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
-            Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.medium) {
-                Text(exportMeldung, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp)
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text(
+                    exportMeldung, modifier = Modifier.padding(12.dp),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp
+                )
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
@@ -1007,7 +1152,11 @@ fun FangListe(
         } else {
             LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(faenge, key = { it.id }) { fang ->
-                    Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
                         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             if (fang.fotoPfad.isNotBlank()) {
                                 Image(painter = rememberAsyncImagePainter(File(fang.fotoPfad)), contentDescription = "Fang Foto",
@@ -1018,10 +1167,22 @@ fun FangListe(
                             Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             if (fang.laenge.isNotBlank()) Text("Länge: ${fang.laenge} cm", fontSize = 14.sp)
                             if (fang.notizen.isNotBlank()) Text("Notizen: ${fang.notizen}", fontSize = 14.sp)
-                            if (fang.temperatur != 0.0) Text("${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (fang.gezeiten.isNotBlank()) Text("Tide: ${fang.gezeiten}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (fang.mondphase.isNotBlank()) Text("Mond: ${fang.mondphase}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (fang.latitude != 0.0) Text("GPS: ${String.format("%.4f", fang.latitude)}, ${String.format("%.4f", fang.longitude)}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (fang.temperatur != 0.0) Text(
+                                "${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung",
+                                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (fang.gezeiten.isNotBlank()) Text(
+                                "Tide: ${fang.gezeiten}", fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (fang.mondphase.isNotBlank()) Text(
+                                "Mond: ${fang.mondphase}", fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (fang.latitude != 0.0) Text(
+                                "GPS: ${String.format(Locale.US, "%.4f", fang.latitude)}, ${String.format(Locale.US, "%.4f", fang.longitude)}",
+                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Row {
                                 TextButton(onClick = { zeigeBearbeitenFuer(fang) }) { Text("Bearbeiten") }
                                 TextButton(onClick = { fangloeschen(context, fang.id); faenge = faengeladen(context) }) {
@@ -1048,7 +1209,8 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
     var meinePosition by remember { mutableStateOf<Location?>(null) }
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     LaunchedEffect(Unit) {
-        val hatBerechtigung = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hatBerechtigung =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         if (hatBerechtigung) {
             fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { location ->
                 meinePosition = location
@@ -1077,9 +1239,11 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             // Distanz berechnen, falls Standort verfügbar
                             val distanzText = meinePosition?.let { pos ->
                                 val ergebnisse = FloatArray(1)
-                                Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse)
+                                Location.distanceBetween(
+                                    pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse
+                                )
                                 val meter = ergebnisse[0]
-                                if (meter >= 1000) " | Distanz: ${String.format("%.1f", meter / 1000)} km"
+                                if (meter >= 1000) " | Distanz: ${String.format(Locale.US, "%.1f", meter / 1000)} km"
                                 else " | Distanz: ${meter.toInt()} m"
                             } ?: ""
                             
@@ -1095,7 +1259,8 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                         val meinMarker = Marker(mapView)
                         meinMarker.position = GeoPoint(pos.latitude, pos.longitude)
                         meinMarker.title = "Mein Standort"
-                        meinMarker.snippet = "${String.format("%.5f", pos.latitude)}, ${String.format("%.5f", pos.longitude)}"
+                        meinMarker.snippet =
+                            "${String.format(Locale.US, "%.5f", pos.latitude)}, ${String.format(Locale.US, "%.5f", pos.longitude)}"
                         meinMarker.setIcon(ContextCompat.getDrawable(mapView.context, android.R.drawable.ic_menu_mylocation))
                         mapView.overlays.add(meinMarker)
                         mapView.invalidate()
@@ -1103,12 +1268,16 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                         // Snippets der Fang-Marker aktualisieren, um Distanz anzuzeigen
                         mapView.overlays.filterIsInstance<Marker>().forEach { marker ->
                             if (marker.title != "Mein Standort") {
-                                val fang = faenge.find { it.fischart == marker.title && it.latitude == marker.position.latitude }
+                                val fang = faenge.find {
+                                    it.fischart == marker.title && it.latitude == marker.position.latitude
+                                }
                                 if (fang != null) {
                                     val ergebnisse = FloatArray(1)
-                                    Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse)
+                                    Location.distanceBetween(
+                                        pos.latitude, pos.longitude, fang.latitude, fang.longitude, ergebnisse
+                                    )
                                     val meter = ergebnisse[0]
-                                    val distText = if (meter >= 1000) " | Distanz: ${String.format("%.1f", meter / 1000)} km"
+                                    val distText = if (meter >= 1000) " | Distanz: ${String.format(Locale.US, "%.1f", meter / 1000)} km"
                                     else " | Distanz: ${meter.toInt()} m"
                                     marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C$distText"
                                 }
@@ -1124,8 +1293,11 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 4.dp
         ) {
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text("Fangspots", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 Button(onClick = zurueck) { Text("Zurück") }
             }

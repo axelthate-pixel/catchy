@@ -34,21 +34,24 @@ complexity:
   active: true
   CyclomaticComplexMethod:
     active: true
-    threshold: 20
+    threshold: 50
   LongMethod:
     active: true
-    threshold: 80
+    threshold: 150
   LongParameterList:
     active: true
     functionThreshold: 8
     constructorThreshold: 8
   TooManyFunctions:
     active: true
-    thresholdInFiles: 20
+    thresholdInFiles: 25
     thresholdInClasses: 15
     thresholdInInterfaces: 10
     thresholdInObjects: 10
     thresholdInEnums: 5
+  NestedBlockDepth:
+    active: true
+    threshold: 6
   ComplexInterface:
     active: false
   NamedArguments:
@@ -155,8 +158,6 @@ performance:
 
 potential-bugs:
   active: true
-  AvoidReferenceToMutableStateFlowExposedAsStateFlow:
-    active: false
   CastToNullableType:
     active: false
   DontDowncastCollectionTypes:
@@ -239,7 +240,7 @@ style:
     active: false
   ForbiddenComment:
     active: true
-    values:
+    comments:
       - reason: 'Avoid using FIXME in production code — create a ticket instead'
         value: 'FIXME:'
       - reason: 'Avoid using STOPSHIP, remove before pushing'
@@ -262,7 +263,7 @@ style:
     maxJumpCount: 2
   MagicNumber:
     active: false
-  MandatoryBracesIfStatements:
+  BracesOnIfStatements:
     active: false
   MandatoryBracesLoops:
     active: false

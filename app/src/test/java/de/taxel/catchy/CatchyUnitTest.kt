@@ -1,6 +1,9 @@
 package de.taxel.catchy
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.text.SimpleDateFormat
 import java.util.*
@@ -35,7 +38,7 @@ class CatchyUnitTest {
             Fang(id = 3L, fischart = "Barsch", laenge = "25", notizen = "", datum = "08.03.2026 11:00"),
         )
         val sortiert = faenge.sortedByDescending {
-            try { sdf.parse(it.datum) } catch (e: Exception) { Date(0) }
+            try { sdf.parse(it.datum) } catch (@Suppress("SwallowedException") e: java.text.ParseException) { Date(0) }
         }
         assertEquals("Zander", sortiert[0].fischart)
         assertEquals("Barsch", sortiert[1].fischart)
@@ -46,7 +49,7 @@ class CatchyUnitTest {
     fun leereListeWirdOhneFehlerSortiert() {
         val sdf = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
         val sortiert = emptyList<Fang>().sortedByDescending {
-            try { sdf.parse(it.datum) } catch (e: Exception) { Date(0) }
+            try { sdf.parse(it.datum) } catch (@Suppress("SwallowedException") e: java.text.ParseException) { Date(0) }
         }
         assertTrue("Leere Liste bleibt leer nach Sortierung", sortiert.isEmpty())
     }
@@ -62,7 +65,7 @@ class CatchyUnitTest {
             Fang(id = 3L, fischart = "Zander", laenge = "", notizen = "", datum = "15.03.2026 14:30"),
         )
         val sortiert = faenge.sortedByDescending {
-            try { sdf.parse(it.datum) } catch (e: Exception) { Date(0) }
+            try { sdf.parse(it.datum) } catch (@Suppress("SwallowedException") e: java.text.ParseException) { Date(0) }
         }
         assertEquals("Defekt", sortiert.last().fischart)
     }

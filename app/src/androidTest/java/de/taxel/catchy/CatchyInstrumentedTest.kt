@@ -9,7 +9,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,7 +53,6 @@ class CatchyInstrumentedTest {
     private lateinit var context: Context
     // Liste aller Testdateien, die nach dem Test wieder gelöscht werden
     private val testDateien = mutableListOf<File>()
-    private val TEST_PREFS = "angelapp_test"
 
     @Before
     fun setup() {
@@ -526,12 +528,15 @@ class CatchyInstrumentedTest {
         // - Für alle drei Küstenstandorte gibt es Gezeitendaten
         // - Die Fotodateien existieren tatsächlich auf dem Gerät
         val testFotos = listOf(
-            testFotoErstellen(datumExif = "2026:03:01 08:00:00", offsetExif = "+01:00", lat = 53.5753, lon = 10.0153, dateiname = "workflow1.jpg"),
-            testFotoErstellen(datumExif = "2026:03:08 15:50:00", offsetExif = "+01:00", lat = 53.867,  lon = 8.700,   dateiname = "workflow2.jpg"),
-            testFotoErstellen(datumExif = "2026:03:15 12:30:00", offsetExif = "+01:00", lat = 54.324,  lon = 10.139,  dateiname = "workflow3.jpg"),
+            testFotoErstellen(datumExif = "2026:03:01 08:00:00", offsetExif = "+01:00",
+                lat = 53.5753, lon = 10.0153, dateiname = "workflow1.jpg"),
+            testFotoErstellen(datumExif = "2026:03:08 15:50:00", offsetExif = "+01:00",
+                lat = 53.867, lon = 8.700, dateiname = "workflow2.jpg"),
+            testFotoErstellen(datumExif = "2026:03:15 12:30:00", offsetExif = "+01:00",
+                lat = 54.324, lon = 10.139, dateiname = "workflow3.jpg"),
         )
 
-        val ergebnisse = testFotos.mapIndexed { index, foto ->
+        val fangIds = testFotos.mapIndexed { index, foto ->
             val uri = Uri.fromFile(foto)
             val (datum, lat, lon) = exifDatenLesen(context, uri)
             val pfad = uriZuPfad(context, uri, index)
