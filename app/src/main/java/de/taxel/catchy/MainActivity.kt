@@ -534,6 +534,39 @@ fun AngelApp() {
     }
 }
 
+// Zeigt GPS, Wetter, Gezeiten und Mondphase als Statusinformationen an
+@Composable
+private fun UmweltStatusPanel(datum: String, gpsStatus: String, wetterStatus: String, aktuellePosition: Location?) {
+    Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("GPS:", fontWeight = FontWeight.Medium)
+                Text(gpsStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Wetter:", fontWeight = FontWeight.Medium)
+                Text(wetterStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+            }
+            val gezeitenStatus = if (aktuellePosition != null)
+                gezeiteBerechnen(datum, aktuellePosition.latitude, aktuellePosition.longitude)
+            else ""
+            if (gezeitenStatus.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Tide:", fontWeight = FontWeight.Medium)
+                    Text(gezeitenStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                }
+            }
+            val mondphaseStatus = mondphaseBerechnen(datum)
+            if (mondphaseStatus.isNotBlank()) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Mond:", fontWeight = FontWeight.Medium)
+                    Text(mondphaseStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                }
+            }
+        }
+    }
+}
+
 // Screen zum Erfassen eines neuen Fangs mit Foto, GPS, Wetter und Fischart-Erkennung
 @Composable
 fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
@@ -668,35 +701,7 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             placeholder = { Text("Köder, Gewässer, Besonderheiten...") },
             modifier = Modifier.fillMaxWidth(), minLines = 3
         )
-        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("GPS:", fontWeight = FontWeight.Medium)
-                    Text(gpsStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Wetter:", fontWeight = FontWeight.Medium)
-                    Text(wetterStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                }
-                val angezeigtesDatumFuerTide = datum
-                val gezeitenStatus = if (aktuellePosition != null)
-                    gezeiteBerechnen(angezeigtesDatumFuerTide, aktuellePosition!!.latitude, aktuellePosition!!.longitude)
-                else ""
-                if (gezeitenStatus.isNotBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Tide:", fontWeight = FontWeight.Medium)
-                        Text(gezeitenStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                    }
-                }
-                val mondphaseStatus = mondphaseBerechnen(angezeigtesDatumFuerTide)
-                if (mondphaseStatus.isNotBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Mond:", fontWeight = FontWeight.Medium)
-                        Text(mondphaseStatus, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-                    }
-                }
-            }
-        }
+        UmweltStatusPanel(datum, gpsStatus, wetterStatus, aktuellePosition)
         Button(
             onClick = {
                 val verwendetesDatum = datum
@@ -736,6 +741,45 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     }
 }
 
+// Zeigt den Button zum Neuladen der Wetterdaten und den aktuellen Wetterstatus an
+@Composable
+private fun WetterNeuLadenPanel(
+    latText: String, lonText: String, datum: String,
+    fallbackLat: Double, fallbackLon: Double,
+    wetterNeuLaden: String,
+    onWetterAktualisiert: (String) -> Unit
+) {
+    Button(
+        onClick = {
+            val lat = latText.toDoubleOrNull() ?: fallbackLat
+            val lon = lonText.toDoubleOrNull() ?: fallbackLon
+            onWetterAktualisiert("wird geladen...")
+            historischesWetterAbrufen(lat, lon, datum) { wetter ->
+                onWetterAktualisiert(if (wetter != null)
+                    "Wetter aktualisiert: ${wetter.temperatur}°C  |  ${wetter.wind} m/s  |  ${wetter.bewoelkung}% Bewölkung"
+                else "Wetter nicht verfügbar")
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+        )
+    ) { Text("Wetterdaten neu laden") }
+    if (wetterNeuLaden.isNotBlank()) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.medium
+        ) {
+            Text(
+                wetterNeuLaden, modifier = Modifier.padding(12.dp),
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 // Screen zum Bearbeiten eines bestehenden Fangs — alle Felder inklusive GPS und Wetter sind änderbar
 @Composable
 fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
@@ -746,9 +790,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
     var datum by remember { mutableStateOf(fang.datum) }
     var latText by remember { mutableStateOf(if (fang.latitude != 0.0) String.format(Locale.US, "%.6f", fang.latitude) else "") }
     var lonText by remember { mutableStateOf(if (fang.longitude != 0.0) String.format(Locale.US, "%.6f", fang.longitude) else "") }
-    var fotoUri by remember {
-        mutableStateOf<Uri?>(if (fang.fotoPfad.isNotBlank()) Uri.fromFile(File(fang.fotoPfad)) else null)
-    }
+    var fotoUri by remember { mutableStateOf<Uri?>(if (fang.fotoPfad.isNotBlank()) Uri.fromFile(File(fang.fotoPfad)) else null) }
     var fotoPfad by remember { mutableStateOf(fang.fotoPfad) }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
     var wetterNeuLaden by remember { mutableStateOf("") }
@@ -856,49 +898,24 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                 modifier = Modifier.weight(1f), singleLine = true
             )
         }
-        Button(
-            onClick = {
-                val lat = latText.toDoubleOrNull() ?: fang.latitude
-                val lon = lonText.toDoubleOrNull() ?: fang.longitude
-                wetterNeuLaden = "wird geladen..."
-                historischesWetterAbrufen(lat, lon, datum) { wetter ->
-                    wetterNeuLaden = if (wetter != null)
-                        "Wetter aktualisiert: ${wetter.temperatur}°C  |  ${wetter.wind} m/s  |  ${wetter.bewoelkung}% Bewölkung"
-                    else "Wetter nicht verfügbar"
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-            )
-        ) { Text("Wetterdaten neu laden") }
-        if (wetterNeuLaden.isNotBlank()) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Text(
-                    wetterNeuLaden, modifier = Modifier.padding(12.dp),
-                    fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        WetterNeuLadenPanel(
+            latText = latText, lonText = lonText, datum = datum,
+            fallbackLat = fang.latitude, fallbackLon = fang.longitude,
+            wetterNeuLaden = wetterNeuLaden,
+            onWetterAktualisiert = { wetterNeuLaden = it }
+        )
         Button(
             onClick = {
                 val lat = latText.toDoubleOrNull() ?: fang.latitude
                 val lon = lonText.toDoubleOrNull() ?: fang.longitude
                 val wetterObjekt = if (wetterNeuLaden.startsWith("Wetter aktualisiert")) {
                     val teile = wetterNeuLaden.removePrefix("Wetter aktualisiert: ").split("  |  ")
-                    try {
-                        Wetter(
-                            temperatur = teile[0].removeSuffix("°C").trim().toDouble(),
-                            wind = teile[1].removeSuffix(" m/s").trim().toDouble(),
-                            luftdruck = fang.luftdruck,
-                            bewoelkung = teile[2].removeSuffix("% Bewölkung").trim().toInt()
-                        )
-                    } catch (e: Exception) { android.util.Log.e(TAG, "Wetter parsen fehlgeschlagen", e); null }
+                    val temp = teile.getOrNull(0)?.removeSuffix("°C")?.trim()?.toDoubleOrNull()
+                    val windWert = teile.getOrNull(1)?.removeSuffix(" m/s")?.trim()?.toDoubleOrNull()
+                    val bew = teile.getOrNull(2)?.removeSuffix("% Bewölkung")?.trim()?.toIntOrNull()
+                    if (temp != null && windWert != null && bew != null)
+                        Wetter(temperatur = temp, wind = windWert, luftdruck = fang.luftdruck, bewoelkung = bew)
+                    else null
                 } else null
                 fangAktualisieren(context, fang.copy(
                     fischart = fischart, laenge = laenge, notizen = notizen, datum = datum,
@@ -916,6 +933,50 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
         ) { Text("Änderungen speichern", fontSize = 16.sp) }
+    }
+}
+
+// Zeigt einen einzelnen Fang in der Liste mit Foto, Metadaten und Aktionsbuttons an
+@Composable
+private fun FangListeEintrag(fang: Fang, onBearbeiten: () -> Unit, onLoeschen: () -> Unit, onKarte: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            if (fang.fotoPfad.isNotBlank()) {
+                Image(painter = rememberAsyncImagePainter(File(fang.fotoPfad)), contentDescription = "Fang Foto",
+                    modifier = Modifier.fillMaxWidth().height(180.dp), contentScale = ContentScale.Crop)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (fang.laenge.isNotBlank()) Text("Länge: ${fang.laenge} cm", fontSize = 14.sp)
+            if (fang.notizen.isNotBlank()) Text("Notizen: ${fang.notizen}", fontSize = 14.sp)
+            if (fang.temperatur != 0.0) Text(
+                "${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung",
+                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (fang.gezeiten.isNotBlank()) Text(
+                "Tide: ${fang.gezeiten}", fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (fang.mondphase.isNotBlank()) Text(
+                "Mond: ${fang.mondphase}", fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (fang.latitude != 0.0) Text(
+                "GPS: ${String.format(Locale.US, "%.4f", fang.latitude)}, " +
+                    "${String.format(Locale.US, "%.4f", fang.longitude)}",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row {
+                TextButton(onClick = onBearbeiten) { Text("Bearbeiten") }
+                TextButton(onClick = onLoeschen) { Text("Löschen", color = MaterialTheme.colorScheme.error) }
+                if (fang.latitude != 0.0) TextButton(onClick = onKarte) { Text("Karte") }
+            }
+        }
     }
 }
 
@@ -995,7 +1056,11 @@ fun FangListe(
                                 luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
                                 bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
                             )
-                        } catch (e: Exception) { android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null }
+                        } catch (e: java.io.IOException) {
+                            android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null
+                        } catch (e: org.json.JSONException) {
+                            android.util.Log.e(TAG, "Wetter JSON fehlgeschlagen", e); null
+                        }
                     } else null
                     fangspeichern(context, Fang(
                         id = fangId,
@@ -1152,48 +1217,12 @@ fun FangListe(
         } else {
             LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(faenge, key = { it.id }) { fang ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            if (fang.fotoPfad.isNotBlank()) {
-                                Image(painter = rememberAsyncImagePainter(File(fang.fotoPfad)), contentDescription = "Fang Foto",
-                                    modifier = Modifier.fillMaxWidth().height(180.dp), contentScale = ContentScale.Crop)
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            if (fang.laenge.isNotBlank()) Text("Länge: ${fang.laenge} cm", fontSize = 14.sp)
-                            if (fang.notizen.isNotBlank()) Text("Notizen: ${fang.notizen}", fontSize = 14.sp)
-                            if (fang.temperatur != 0.0) Text(
-                                "${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung",
-                                fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (fang.gezeiten.isNotBlank()) Text(
-                                "Tide: ${fang.gezeiten}", fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (fang.mondphase.isNotBlank()) Text(
-                                "Mond: ${fang.mondphase}", fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (fang.latitude != 0.0) Text(
-                                "GPS: ${String.format(Locale.US, "%.4f", fang.latitude)}, ${String.format(Locale.US, "%.4f", fang.longitude)}",
-                                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row {
-                                TextButton(onClick = { zeigeBearbeitenFuer(fang) }) { Text("Bearbeiten") }
-                                TextButton(onClick = { fangloeschen(context, fang.id); faenge = faengeladen(context) }) {
-                                    Text("Löschen", color = MaterialTheme.colorScheme.error)
-                                }
-                                if (fang.latitude != 0.0) {
-                                    TextButton(onClick = { zeigeKarteFuer(fang) }) { Text("Karte") }
-                                }
-                            }
-                        }
-                    }
+                    FangListeEintrag(
+                        fang = fang,
+                        onBearbeiten = { zeigeBearbeitenFuer(fang) },
+                        onLoeschen = { fangloeschen(context, fang.id); faenge = faengeladen(context) },
+                        onKarte = { zeigeKarteFuer(fang) }
+                    )
                 }
             }
         }

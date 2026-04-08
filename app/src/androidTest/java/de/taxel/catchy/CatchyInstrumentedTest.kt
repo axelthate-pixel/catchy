@@ -536,7 +536,7 @@ class CatchyInstrumentedTest {
                 lat = 54.324, lon = 10.139, dateiname = "workflow3.jpg"),
         )
 
-        val fangIds = testFotos.mapIndexed { index, foto ->
+        testFotos.forEachIndexed { index, foto ->
             val uri = Uri.fromFile(foto)
             val (datum, lat, lon) = exifDatenLesen(context, uri)
             val pfad = uriZuPfad(context, uri, index)
@@ -555,7 +555,6 @@ class CatchyInstrumentedTest {
                 fotoPfad = pfad,
                 gezeiten = gezeiten
             ))
-            fangId
         }
 
         val gespeichert = faengeladen(context)
