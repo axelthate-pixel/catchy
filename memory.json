@@ -1,8 +1,29 @@
 {
   "project": "de.taxel.catchy",
   "description": "Detekt code quality history — automatically updated on every push",
-  "runs": [],
-  "latest": null,
+  "runs": [
+    {
+      "timestamp": "2026-04-08T13:34:53.252380+00:00",
+      "commit": "b5c9be13497a59cbf2af08fda84fa72c8bd7f193",
+      "branch": "main",
+      "summary": {
+        "score": 100.0,
+        "total_issues": 0,
+        "errors": 0,
+        "warnings": 0,
+        "infos": 0
+      },
+      "top_rules": [],
+      "issues": []
+    }
+  ],
+  "latest": {
+    "score": 100.0,
+    "total_issues": 0,
+    "errors": 0,
+    "warnings": 0,
+    "infos": 0
+  },
   "known_issues": [],
-  "last_updated": null
+  "last_updated": "2026-04-08T13:34:53.252380+00:00"
 }
