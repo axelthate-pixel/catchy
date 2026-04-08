@@ -44,7 +44,7 @@
 | Regel | Grenzwert |
 |---|---|
 | Zyklomatische Komplexität | 50 |
-| Methodenlänge | 150 Zeilen |
+| Methodenlänge | 200 Zeilen |
 | Parameter pro Funktion | 8 |
 | Funktionen pro Datei | 25 |
 | Verschachtelungstiefe | 6 |
