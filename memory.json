@@ -15,6 +15,20 @@
       },
       "top_rules": [],
       "issues": []
+    },
+    {
+      "timestamp": "2026-04-08T13:39:17.225424+00:00",
+      "commit": "d260789f9f51d3cc7b8981661a12534cdfbc5fc7",
+      "branch": "main",
+      "summary": {
+        "score": 100.0,
+        "total_issues": 0,
+        "errors": 0,
+        "warnings": 0,
+        "infos": 0
+      },
+      "top_rules": [],
+      "issues": []
     }
   ],
   "latest": {
@@ -25,5 +39,10 @@
     "infos": 0
   },
   "known_issues": [],
-  "last_updated": "2026-04-08T13:34:53.252380+00:00"
+  "last_updated": "2026-04-08T13:39:17.225424+00:00",
+  "trend": {
+    "delta": 0,
+    "score_delta": 0.0,
+    "direction": "stable"
+  }
 }
