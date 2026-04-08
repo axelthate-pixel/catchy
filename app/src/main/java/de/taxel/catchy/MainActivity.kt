@@ -1235,7 +1235,7 @@ fun FangListe(
 // Wandelt einen Kompassgrad (0-360) in eine Himmelsrichtung um
 fun bearingZuHimmelsrichtung(grad: Float): String {
     val richtungen = listOf("N", "NO", "O", "SO", "S", "SW", "W", "NW")
-    return richtungen[((grad + 22.5f) / 45f).toInt() % 8]
+    return richtungen[((grad + 22.5f) / 45f).toInt().mod(8)]
 }
 
 // Screen mit einer OpenStreetMap-Karte aller Fangspots als Marker.
