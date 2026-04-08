@@ -35,6 +35,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.exifinterface.media.ExifInterface
 import coil.compose.rememberAsyncImagePainter
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import org.json.JSONArray
@@ -1229,6 +1232,12 @@ fun FangListe(
     }
 }
 
+// Wandelt einen Kompassgrad (0-360) in eine Himmelsrichtung um
+fun bearingZuHimmelsrichtung(grad: Float): String {
+    val richtungen = listOf("N", "NO", "O", "SO", "S", "SW", "W", "NW")
+    return richtungen[((grad + 22.5f) / 45f).toInt() % 8]
+}
+
 // Screen mit einer OpenStreetMap-Karte aller Fangspots als Marker.
 // zentriereFang: wenn gesetzt, wird die Karte auf diesen Fang gezoomt (Zoom 15), sonst Übersicht (Zoom 12)
 @Composable
@@ -1237,14 +1246,38 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
     val faenge = remember { faengeladen(context).filter { it.latitude != 0.0 } }
     var meinePosition by remember { mutableStateOf<Location?>(null) }
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
-    LaunchedEffect(Unit) {
+    val selectedFangState = remember { mutableStateOf<Fang?>(null) }
+    var selectedFang by selectedFangState
+    var lastDistance by remember { mutableStateOf<Float?>(null) }
+    var distanzTrend by remember { mutableStateOf("") }
+
+    DisposableEffect(Unit) {
         val hatBerechtigung =
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) { meinePosition = result.lastLocation }
+        }
         if (hatBerechtigung) {
-            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener { location ->
-                meinePosition = location
+            val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000L)
+                .setMinUpdateIntervalMillis(1000L).build()
+            fusedLocationClient.requestLocationUpdates(request, locationCallback, android.os.Looper.getMainLooper())
+        }
+        onDispose { fusedLocationClient.removeLocationUpdates(locationCallback) }
+    }
+
+    LaunchedEffect(meinePosition, selectedFang) {
+        val fang = selectedFang ?: run { lastDistance = null; distanzTrend = ""; return@LaunchedEffect }
+        val pos = meinePosition ?: return@LaunchedEffect
+        val results = FloatArray(1)
+        Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, results)
+        lastDistance?.let { letzteDistanz ->
+            distanzTrend = when {
+                results[0] < letzteDistanz - 5f -> "↓ näher"
+                results[0] > letzteDistanz + 5f -> "↑ weiter weg"
+                else -> ""
             }
         }
+        lastDistance = results[0]
     }
     Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         if (faenge.isEmpty() && meinePosition == null) {
@@ -1277,6 +1310,10 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             } ?: ""
                             
                             marker.snippet = "${fang.datum}  |  ${fang.temperatur}°C$distanzText"
+                            marker.setOnMarkerClickListener { _, _ ->
+                                selectedFangState.value = fang
+                                true
+                            }
                             overlays.add(marker)
                         }
                     }
@@ -1329,6 +1366,51 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
             ) {
                 Text("Fangspots", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 Button(onClick = zurueck) { Text("Zurück") }
+            }
+        }
+        selectedFang?.let { fang ->
+            Surface(
+                modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 4.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        TextButton(onClick = { selectedFang = null }) { Text("✕") }
+                    }
+                    Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    meinePosition?.let { pos ->
+                        val results = FloatArray(2)
+                        Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, results)
+                        val distanzText = if (results[0] >= 1000)
+                            "${String.format(Locale.US, "%.1f", results[0] / 1000)} km"
+                        else "${results[0].toInt()} m"
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${bearingZuHimmelsrichtung(results[1])} · $distanzText",
+                                fontSize = 15.sp, fontWeight = FontWeight.Medium
+                            )
+                            if (distanzTrend.isNotBlank()) Text(
+                                distanzTrend, fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } ?: Text(
+                        "Standort wird ermittelt...",
+                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
