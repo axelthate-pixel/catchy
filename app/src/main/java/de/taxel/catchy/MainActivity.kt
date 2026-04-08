@@ -1270,11 +1270,13 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
         val pos = meinePosition ?: return@LaunchedEffect
         val results = FloatArray(1)
         Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, results)
-        lastDistance?.let { letzteDistanz ->
-            distanzTrend = when {
-                results[0] < letzteDistanz - 5f -> "↓ näher"
-                results[0] > letzteDistanz + 5f -> "↑ weiter weg"
-                else -> ""
+        if (pos.accuracy <= 20f) {
+            lastDistance?.let { letzteDistanz ->
+                distanzTrend = when {
+                    results[0] < letzteDistanz - 20f -> "↓ näher"
+                    results[0] > letzteDistanz + 20f -> "↑ weiter weg"
+                    else -> distanzTrend
+                }
             }
         }
         lastDistance = results[0]
