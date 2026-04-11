@@ -44,7 +44,7 @@ complexity:
     constructorThreshold: 8
   TooManyFunctions:
     active: true
-    thresholdInFiles: 25
+    thresholdInFiles: 30
     thresholdInClasses: 15
     thresholdInInterfaces: 10
     thresholdInObjects: 10

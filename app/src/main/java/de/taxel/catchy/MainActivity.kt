@@ -519,6 +519,7 @@ fun AngelApp() {
                 scrollZuBearbeiteterFangId = fangId; aktualisierung++; screen = "liste"
             })
         }
+        "aibuddy" -> AiBuddyScreen(zurueck = { screen = "liste" })
         "erfassung" -> FangErfassungScreen(
             zeigeListeAn = { aktualisierung++; screen = "liste" },
             zeigeKarteAn = { vorherKartenScreen = "erfassung"; aktualisierung++; screen = "karte" }
@@ -530,6 +531,7 @@ fun AngelApp() {
                     kartenFang = fang; scrollZuFangId = fang.id; vorherKartenScreen = "liste"; screen = "karte"
                 },
                 zeigeBearbeitenFuer = { fang -> bearbeitenFang = fang; screen = "bearbeiten" },
+                zeigeAiBuddyAn = { screen = "aibuddy" },
                 scrollZuFangId = scrollZuBearbeiteterFangId ?: scrollZuFangId,
                 onScrollZuFangIdVerbraucht = { scrollZuBearbeiteterFangId = null; scrollZuFangId = null }
             )
@@ -989,6 +991,7 @@ fun FangListe(
     zeigeErfassungAn: () -> Unit,
     zeigeKarteFuer: (Fang) -> Unit,
     zeigeBearbeitenFuer: (Fang) -> Unit,
+    zeigeAiBuddyAn: () -> Unit,
     // Nach Rückkehr von der Karte: ID des Fangs, zu dem gescrollt werden soll
     scrollZuFangId: Long? = null,
     onScrollZuFangIdVerbraucht: () -> Unit = {}
@@ -1191,7 +1194,7 @@ fun FangListe(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                 )
-            ) { Text("Foto aufnehmen") }
+            ) { Text("📷", fontSize = 20.sp) }
             Button(
                 onClick = { galerieLauncher.launch("image/*") },
                 modifier = Modifier.weight(1f),
@@ -1199,7 +1202,11 @@ fun FangListe(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                 )
-            ) { Text("Aus Galerie") }
+            ) { Text("🖼️", fontSize = 20.sp) }
+            Button(
+                onClick = zeigeAiBuddyAn,
+                modifier = Modifier.weight(2f)
+            ) { Text("AI Buddy") }
         }
         if (exportMeldung.isNotBlank()) {
             Spacer(modifier = Modifier.height(4.dp))
@@ -1228,6 +1235,35 @@ fun FangListe(
                     )
                 }
             }
+        }
+    }
+}
+
+// AI Buddy Screen — KI-basierte Angelempfehlungen (Issue #11)
+@Composable
+fun AiBuddyScreen(zurueck: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("AI Buddy", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            TextButton(onClick = zurueck) { Text("Zurück") }
+        }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            shape = MaterialTheme.shapes.medium
+        ) {
+            Text(
+                "KI-Empfehlungen werden hier erscheinen.\nAPI-Anbindung folgt in Kürze.",
+                modifier = Modifier.padding(16.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
         }
     }
 }
