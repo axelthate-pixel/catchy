@@ -36,6 +36,11 @@ android {
         versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        val localProps = Properties()
+        val localPropsFile = rootProject.file("local.properties")
+        if (localPropsFile.exists()) localProps.load(FileInputStream(localPropsFile))
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProps.getProperty("GEMINI_API_KEY", "")}\"")
     }
 
     signingConfigs {
@@ -83,6 +88,7 @@ kotlin {
 android {
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

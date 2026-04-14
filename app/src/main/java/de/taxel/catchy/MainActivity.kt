@@ -1266,12 +1266,98 @@ fun FangListe(
     }
 }
 
+// Ruft eine Angelempfehlung von der Gemini API ab (Hintergrund-Thread).
+fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?) -> Unit) {
+    thread {
+        try {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
+            val body = JSONObject().put("contents", JSONArray().put(
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            ))
+            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            conn.outputStream.write(body.toString().toByteArray())
+            val response = conn.inputStream.bufferedReader().readText()
+            val text = JSONObject(response)
+                .getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts")
+                .getJSONObject(0).getString("text")
+            onErgebnis(text)
+        } catch (e: java.io.IOException) {
+            android.util.Log.e(TAG, "Gemini API fehlgeschlagen", e); onErgebnis(null)
+        } catch (e: org.json.JSONException) {
+            android.util.Log.e(TAG, "Gemini JSON fehlgeschlagen", e); onErgebnis(null)
+        }
+    }
+}
+
+// Erstellt den Prompt für die Angelempfehlung aus aktuellen Bedingungen und Fanghistorie.
+fun angelEmpfehlungPromptErstellen(
+    datum: String, lat: Double, lon: Double,
+    wetter: Wetter?, mondphase: String, gezeiten: String, letzeFaenge: List<Fang>
+): String = buildString {
+    appendLine("Du bist ein erfahrener Angelexperte für europäisches Spinnfischen.")
+    appendLine("Gib konkrete, praxisnahe Empfehlungen für den heutigen Angeltag auf Deutsch (max. 250 Wörter).")
+    appendLine("\n## Aktuelle Bedingungen")
+    appendLine("Datum/Zeit: $datum")
+    appendLine("Position: ${String.format(Locale.US, "%.4f", lat)}, ${String.format(Locale.US, "%.4f", lon)}")
+    wetter?.let {
+        appendLine("Temperatur: ${it.temperatur}°C | Wind: ${it.wind} m/s | Luftdruck: ${it.luftdruck} hPa | Bewölkung: ${it.bewoelkung}%")
+    }
+    if (mondphase.isNotBlank()) appendLine("Mondphase: $mondphase")
+    if (gezeiten.isNotBlank()) appendLine("Gezeiten: $gezeiten")
+    appendLine("\n## Zielarten\nZander, Hecht, Barsch, Rapfen, Forellenartige")
+    if (letzeFaenge.isNotEmpty()) {
+        appendLine("\n## Meine letzten Fänge")
+        letzeFaenge.take(10).forEach { f ->
+            append("- ${f.fischart}")
+            if (f.laenge.isNotBlank()) append(", ${f.laenge} cm")
+            append(", ${f.datum}")
+            if (f.temperatur != 0.0) append(", ${f.temperatur}°C, Wind ${f.wind} m/s")
+            appendLine()
+        }
+    }
+    appendLine("\n## Bitte empfehle:")
+    appendLine("1. Aktivitätsbewertung der Zielarten")
+    appendLine("2. Beste Zeitfenster heute")
+    appendLine("3. Technik und Tiefe")
+    appendLine("4. Köder")
+    appendLine("5. Besonderheiten aus meiner Fanghistorie")
+}
+
 // AI Buddy Screen — KI-basierte Angelempfehlungen (Issue #11)
 @Composable
 fun AiBuddyScreen(zurueck: () -> Unit) {
+    val context = LocalContext.current
+    var gpsStatus by remember { mutableStateOf("wird ermittelt...") }
+    var aktuellePosition by remember { mutableStateOf<Location?>(null) }
+    var aktuellesWetter by remember { mutableStateOf<Wetter?>(null) }
+    var empfehlung by remember { mutableStateOf("") }
+    var ladeStatus by remember { mutableStateOf("") }
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    val datum = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date()) }
+
+    LaunchedEffect(Unit) {
+        val hatBerechtigung = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+        if (hatBerechtigung) {
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        aktuellePosition = loc
+                        gpsStatus = "${String.format(Locale.US, "%.4f", loc.latitude)}, ${String.format(Locale.US, "%.4f", loc.longitude)}"
+                        wetterAbrufen(loc.latitude, loc.longitude) { wetter -> aktuellesWetter = wetter }
+                    } else gpsStatus = "Kein Signal"
+                }
+        } else gpsStatus = "Berechtigung fehlt"
+    }
+
     Column(
-        modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1281,16 +1367,47 @@ fun AiBuddyScreen(zurueck: () -> Unit) {
             Text("AI Buddy", fontSize = 26.sp, fontWeight = FontWeight.Bold)
             TextButton(onClick = zurueck) { Text("Zurück") }
         }
-        Surface(
+        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("GPS: $gpsStatus", fontSize = 13.sp)
+                val wetterText = if (aktuellesWetter != null) {
+                    "${aktuellesWetter!!.temperatur}°C · ${aktuellesWetter!!.wind} m/s · ${aktuellesWetter!!.luftdruck} hPa"
+                } else "wird geladen..."
+                Text("Wetter: $wetterText", fontSize = 13.sp)
+            }
+        }
+        Button(
+            onClick = {
+                val pos = aktuellePosition ?: return@Button
+                ladeStatus = "Empfehlung wird erstellt..."
+                empfehlung = ""
+                val faenge = faengeladen(context)
+                val prompt = angelEmpfehlungPromptErstellen(
+                    datum, pos.latitude, pos.longitude, aktuellesWetter,
+                    mondphaseBerechnen(datum), gezeiteBerechnen(datum, pos.latitude, pos.longitude), faenge
+                )
+                geminiEmpfehlungAbrufen(BuildConfig.GEMINI_API_KEY, prompt) { ergebnis ->
+                    empfehlung = ergebnis ?: "Empfehlung konnte nicht geladen werden."
+                    ladeStatus = ""
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = MaterialTheme.shapes.medium
-        ) {
-            Text(
-                "KI-Empfehlungen werden hier erscheinen.\nAPI-Anbindung folgt in Kürze.",
-                modifier = Modifier.padding(16.dp),
-                color = MaterialTheme.colorScheme.onSecondaryContainer
-            )
+            enabled = aktuellePosition != null
+        ) { Text(if (aktuellePosition == null) "Warte auf GPS..." else "Empfehlung anfordern") }
+        if (ladeStatus.isNotBlank()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text(ladeStatus, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (empfehlung.isNotBlank()) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Text(empfehlung, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
+            }
         }
     }
 }
