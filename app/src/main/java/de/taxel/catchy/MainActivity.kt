@@ -15,7 +15,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -951,8 +955,31 @@ private fun FangListeEintrag(fang: Fang, onBearbeiten: () -> Unit, onLoeschen: (
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             if (fang.fotoPfad.isNotBlank()) {
-                Image(painter = rememberAsyncImagePainter(File(fang.fotoPfad)), contentDescription = "Fang Foto",
-                    modifier = Modifier.fillMaxWidth().height(180.dp), contentScale = ContentScale.Crop)
+                var fotoVollbild by remember { mutableStateOf(false) }
+                Image(
+                    painter = rememberAsyncImagePainter(File(fang.fotoPfad)),
+                    contentDescription = "Fang Foto",
+                    modifier = Modifier.fillMaxWidth().height(180.dp).clickable { fotoVollbild = true },
+                    contentScale = ContentScale.Crop
+                )
+                if (fotoVollbild) {
+                    Dialog(
+                        onDismissRequest = { fotoVollbild = false },
+                        properties = DialogProperties(usePlatformDefaultWidth = false)
+                    ) {
+                        Box(
+                            modifier = Modifier.fillMaxSize().clickable { fotoVollbild = false },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                painter = rememberAsyncImagePainter(File(fang.fotoPfad)),
+                                contentDescription = "Fang Foto Vollbild",
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
             }
             Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 18.sp)
