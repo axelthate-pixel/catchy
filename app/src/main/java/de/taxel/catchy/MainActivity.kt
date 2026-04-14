@@ -613,6 +613,7 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     var aktuellePosition by remember { mutableStateOf<Location?>(null) }
     var aktuellesWetter by remember { mutableStateOf<Wetter?>(null) }
     var aktuellesTiefe by remember { mutableStateOf("") }
+    var manuellesTiefe by remember { mutableStateOf("") }
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     var fotoPfad by remember { mutableStateOf("") }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
@@ -736,6 +737,12 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             placeholder = { Text("Köder, Gewässer, Besonderheiten...") },
             modifier = Modifier.fillMaxWidth(), minLines = 3
         )
+        OutlinedTextField(
+            value = manuellesTiefe, onValueChange = { manuellesTiefe = it },
+            label = { Text("Tiefe (m)") },
+            placeholder = { Text("z.B. 3.5 m — leer lassen für automatische Ermittlung") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
         UmweltStatusPanel(datum, gpsStatus, wetterStatus, aktuellePosition)
         Button(
             onClick = {
@@ -753,10 +760,10 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                     fotoPfad = fotoPfad,
                     gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
                     mondphase = mondphaseBerechnen(verwendetesDatum),
-                    tiefe = aktuellesTiefe
+                    tiefe = if (manuellesTiefe.isNotBlank()) manuellesTiefe else aktuellesTiefe
                 ))
                 gespeichert = true
-                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""
+                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""; manuellesTiefe = ""
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
