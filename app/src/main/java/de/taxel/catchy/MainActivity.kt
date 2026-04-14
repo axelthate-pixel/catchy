@@ -1390,7 +1390,8 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             val marker = Marker(this)
                             marker.position = GeoPoint(fang.latitude, fang.longitude)
                             marker.title = fang.fischart
-                            
+                            marker.infoWindow = null  // osmdroid-InfoWindow deaktivieren, Panel wird in Compose verwaltet
+
                             // Distanz berechnen, falls Standort verfügbar
                             val distanzText = meinePosition?.let { pos ->
                                 val ergebnisse = FloatArray(1)
