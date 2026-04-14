@@ -1439,42 +1439,62 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 4.dp
             ) {
-                Column(
+                Row(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        TextButton(onClick = { selectedFang = null }) { Text("✕") }
+                    if (fang.fotoPfad.isNotBlank()) {
+                        Image(
+                            painter = rememberAsyncImagePainter(File(fang.fotoPfad)),
+                            contentDescription = "Fang Foto",
+                            modifier = Modifier.size(72.dp),
+                            contentScale = ContentScale.Crop
+                        )
                     }
-                    Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    meinePosition?.let { pos ->
-                        val results = FloatArray(2)
-                        Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, results)
-                        val distanzText = if (results[0] >= 1000)
-                            "${String.format(Locale.US, "%.1f", results[0] / 1000)} km"
-                        else "${results[0].toInt()} m"
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                "${bearingZuHimmelsrichtung(results[1])} · $distanzText",
-                                fontSize = 15.sp, fontWeight = FontWeight.Medium
-                            )
-                            if (distanzTrend.isNotBlank()) Text(
-                                distanzTrend, fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Text(fang.fischart, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            TextButton(onClick = { selectedFang = null }) { Text("✕") }
                         }
-                    } ?: Text(
-                        "Standort wird ermittelt...",
-                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                        if (fang.laenge.isNotBlank()) Text(
+                            "Länge: ${fang.laenge} cm", fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        meinePosition?.let { pos ->
+                            val results = FloatArray(2)
+                            Location.distanceBetween(
+                                pos.latitude, pos.longitude, fang.latitude, fang.longitude, results
+                            )
+                            val distanzText = if (results[0] >= 1000)
+                                "${String.format(Locale.US, "%.1f", results[0] / 1000)} km"
+                            else "${results[0].toInt()} m"
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${bearingZuHimmelsrichtung(results[1])} · $distanzText",
+                                    fontSize = 15.sp, fontWeight = FontWeight.Medium
+                                )
+                                if (distanzTrend.isNotBlank()) Text(
+                                    distanzTrend, fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } ?: Text(
+                            "Standort wird ermittelt...",
+                            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
