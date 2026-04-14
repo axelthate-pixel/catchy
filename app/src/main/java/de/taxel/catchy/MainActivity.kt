@@ -1279,6 +1279,13 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
             conn.setRequestProperty("Content-Type", "application/json")
             conn.doOutput = true
             conn.outputStream.write(body.toString().toByteArray())
+            val statusCode = conn.responseCode
+            if (statusCode != 200) {
+                val error = conn.errorStream?.bufferedReader()?.readText() ?: "(kein Body)"
+                android.util.Log.e(TAG, "Gemini HTTP $statusCode: $error")
+                onErgebnis(null)
+                return@thread
+            }
             val response = conn.inputStream.bufferedReader().readText()
             val text = JSONObject(response)
                 .getJSONArray("candidates").getJSONObject(0)
