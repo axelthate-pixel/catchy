@@ -1268,6 +1268,10 @@ fun FangListe(
 
 // Ruft eine Angelempfehlung von der Gemini API ab (Hintergrund-Thread).
 fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?) -> Unit) {
+    if (apiKey.isBlank()) {
+        onErgebnis("Fehler: Kein API-Key konfiguriert (local.properties)")
+        return
+    }
     thread {
         try {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$apiKey"
@@ -1281,9 +1285,9 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
             conn.outputStream.write(body.toString().toByteArray())
             val statusCode = conn.responseCode
             if (statusCode != 200) {
-                val error = conn.errorStream?.bufferedReader()?.readText() ?: "(kein Body)"
-                android.util.Log.e(TAG, "Gemini HTTP $statusCode: $error")
-                onErgebnis(null)
+                val errorBody = conn.errorStream?.bufferedReader()?.readText() ?: "(kein Body)"
+                android.util.Log.e(TAG, "Gemini HTTP $statusCode: $errorBody")
+                onErgebnis("Fehler: HTTP $statusCode\n$errorBody")
                 return@thread
             }
             val response = conn.inputStream.bufferedReader().readText()
@@ -1293,9 +1297,11 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
                 .getJSONObject(0).getString("text")
             onErgebnis(text)
         } catch (e: java.io.IOException) {
-            android.util.Log.e(TAG, "Gemini API fehlgeschlagen", e); onErgebnis(null)
+            android.util.Log.e(TAG, "Gemini API fehlgeschlagen", e)
+            onErgebnis("Netzwerkfehler: ${e.message}")
         } catch (e: org.json.JSONException) {
-            android.util.Log.e(TAG, "Gemini JSON fehlgeschlagen", e); onErgebnis(null)
+            android.util.Log.e(TAG, "Gemini JSON fehlgeschlagen", e)
+            onErgebnis("JSON-Fehler: ${e.message}")
         }
     }
 }
