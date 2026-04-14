@@ -78,8 +78,7 @@ data class Fang(
     val bewoelkung: Int = 0,                   // Bewölkung in Prozent (0–100)
     val fotoPfad: String = "",                 // Absoluter Dateipfad zum Foto, leer wenn keins vorhanden
     val gezeiten: String = "",                 // Gezeitenstand zum Fangzeitpunkt (astronomische Näherung)
-    val mondphase: String = "",                // Mondphase zum Fangzeitpunkt (astronomische Näherung)
-    val tiefe: String = ""                     // Wassertiefe in Metern (GEBCO-Bathymetrie), leer wenn nicht ermittelbar
+    val mondphase: String = ""                 // Mondphase zum Fangzeitpunkt (astronomische Näherung)
 )
 
 // Lädt alle gespeicherten Fänge aus den SharedPreferences und gibt sie absteigend nach Datum sortiert zurück
@@ -105,8 +104,7 @@ fun faengeladen(context: Context): List<Fang> {
             bewoelkung = obj.optInt("bewoelkung", 0),
             fotoPfad = obj.optString("fotoPfad", ""),
             gezeiten = obj.optString("gezeiten", ""),
-            mondphase = obj.optString("mondphase", ""),
-            tiefe = obj.optString("tiefe", "")
+            mondphase = obj.optString("mondphase", "")
         ))
     }
     // Neueste Fänge zuerst; bei ungültigem Datum wird epoch 0 als Fallback verwendet
@@ -137,7 +135,6 @@ fun fangspeichern(context: Context, fang: Fang) {
     obj.put("fotoPfad", fang.fotoPfad)
     obj.put("gezeiten", fang.gezeiten)
     obj.put("mondphase", fang.mondphase)
-    obj.put("tiefe", fang.tiefe)
     array.put(obj)
     prefs.edit().putString("faenge", array.toString()).apply()
 }
@@ -166,7 +163,6 @@ fun fangAktualisieren(context: Context, fang: Fang) {
             updated.put("fotoPfad", fang.fotoPfad)
             updated.put("gezeiten", fang.gezeiten)
             updated.put("mondphase", fang.mondphase)
-            updated.put("tiefe", fang.tiefe)
             neu.put(updated)
         } else neu.put(obj)
     }
@@ -301,30 +297,6 @@ fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebni
             ))
         } catch (e: Exception) { android.util.Log.e(TAG, "Historisches Wetter abrufen fehlgeschlagen", e); onErgebnis(null) }
     }
-}
-
-// Ruft die Wassertiefe via GEBCO-Bathymetrie (OpenTopoData) ab. Gibt "X,X m" zurück bei Küste/Meer,
-// leer bei Binnengewässern oder fehlendem GPS. Muss im Hintergrund-Thread aufgerufen werden.
-fun wassertiefeLaden(lat: Double, lon: Double): String {
-    if (lat == 0.0 && lon == 0.0) return ""
-    return try {
-        val url = "https://api.opentopodata.org/v1/gebco2020?" +
-            "locations=${String.format(Locale.US, "%.6f", lat)},${String.format(Locale.US, "%.6f", lon)}"
-        val json = JSONObject(URL(url).readText())
-        val results = json.getJSONArray("results")
-        if (results.length() == 0) return ""
-        val elevation = results.getJSONObject(0).optDouble("elevation", 0.0)
-        if (elevation < 0) String.format(Locale.GERMANY, "%.1f m", -elevation) else ""
-    } catch (e: java.io.IOException) {
-        android.util.Log.e(TAG, "Tiefe laden fehlgeschlagen", e); ""
-    } catch (e: org.json.JSONException) {
-        android.util.Log.e(TAG, "Tiefe JSON fehlgeschlagen", e); ""
-    }
-}
-
-// Lädt die Wassertiefe im Hintergrund-Thread und liefert das Ergebnis per Callback zurück.
-fun tiefeAbrufen(lat: Double, lon: Double, onErgebnis: (String) -> Unit) {
-    thread { onErgebnis(wassertiefeLaden(lat, lon)) }
 }
 
 // Liest Datum und GPS-Koordinaten aus den EXIF-Daten eines Fotos.
@@ -612,8 +584,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
     var wetterStatus by remember { mutableStateOf("wartet auf GPS...") }
     var aktuellePosition by remember { mutableStateOf<Location?>(null) }
     var aktuellesWetter by remember { mutableStateOf<Wetter?>(null) }
-    var aktuellesTiefe by remember { mutableStateOf("") }
-    var manuellesTiefe by remember { mutableStateOf("") }
     var fotoUri by remember { mutableStateOf<Uri?>(null) }
     var fotoPfad by remember { mutableStateOf("") }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
@@ -667,7 +637,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                             "${wetter.temperatur}°C  |  Wind ${wetter.wind} m/s  |  ${wetter.bewoelkung}% Bewölkung"
                         else "Nicht verfügbar"
                     }
-                    tiefeAbrufen(location.latitude, location.longitude) { tiefe -> aktuellesTiefe = tiefe }
                 } else { gpsStatus = "Kein Signal"; wetterStatus = "Kein GPS" }
             }
         }
@@ -737,12 +706,6 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
             placeholder = { Text("Köder, Gewässer, Besonderheiten...") },
             modifier = Modifier.fillMaxWidth(), minLines = 3
         )
-        OutlinedTextField(
-            value = manuellesTiefe, onValueChange = { manuellesTiefe = it },
-            label = { Text("Tiefe (m)") },
-            placeholder = { Text("z.B. 3.5 m — leer lassen für automatische Ermittlung") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true
-        )
         UmweltStatusPanel(datum, gpsStatus, wetterStatus, aktuellePosition)
         Button(
             onClick = {
@@ -759,11 +722,10 @@ fun FangErfassungScreen(zeigeListeAn: () -> Unit, zeigeKarteAn: () -> Unit) {
                     bewoelkung = aktuellesWetter?.bewoelkung ?: 0,
                     fotoPfad = fotoPfad,
                     gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
-                    mondphase = mondphaseBerechnen(verwendetesDatum),
-                    tiefe = if (manuellesTiefe.isNotBlank()) manuellesTiefe else aktuellesTiefe
+                    mondphase = mondphaseBerechnen(verwendetesDatum)
                 ))
                 gespeichert = true
-                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""; manuellesTiefe = ""
+                fischart = ""; laenge = ""; notizen = ""; fotoUri = null; fotoPfad = ""
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
@@ -837,7 +799,6 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
     var fotoPfad by remember { mutableStateOf(fang.fotoPfad) }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
     var wetterNeuLaden by remember { mutableStateOf("") }
-    var tiefeText by remember { mutableStateOf(fang.tiefe) }
 
     val kameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { erfolg ->
         if (erfolg && tempFotoDatei != null) {
@@ -942,12 +903,6 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                 modifier = Modifier.weight(1f), singleLine = true
             )
         }
-        OutlinedTextField(
-            value = tiefeText, onValueChange = { tiefeText = it },
-            label = { Text("Tiefe (m)") },
-            placeholder = { Text("z.B. 3.5 m — leer lassen für automatische Ermittlung") },
-            modifier = Modifier.fillMaxWidth(), singleLine = true
-        )
         WetterNeuLadenPanel(
             latText = latText, lonText = lonText, datum = datum,
             fallbackLat = fang.latitude, fallbackLon = fang.longitude,
@@ -967,7 +922,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                         Wetter(temperatur = temp, wind = windWert, luftdruck = fang.luftdruck, bewoelkung = bew)
                     else null
                 } else null
-                val aktualisiertFang = fang.copy(
+                fangAktualisieren(context, fang.copy(
                     fischart = fischart, laenge = laenge, notizen = notizen, datum = datum,
                     latitude = lat, longitude = lon,
                     temperatur = wetterObjekt?.temperatur ?: fang.temperatur,
@@ -977,13 +932,8 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                     fotoPfad = fotoPfad,
                     gezeiten = gezeiteBerechnen(datum, lat, lon),
                     mondphase = mondphaseBerechnen(datum)
-                )
-                thread {
-                    val neueTiefe = if (tiefeText.isNotBlank()) tiefeText
-                                    else wassertiefeLaden(lat, lon).ifBlank { fang.tiefe }
-                    fangAktualisieren(context, aktualisiertFang.copy(tiefe = neueTiefe))
-                    android.os.Handler(android.os.Looper.getMainLooper()).post { zeigeListeFuer(fang.id) }
-                }
+                ))
+                zeigeListeFuer(fang.id)
             },
             modifier = Modifier.fillMaxWidth().height(52.dp),
             enabled = fischart.isNotBlank()
@@ -1012,10 +962,6 @@ private fun FangListeEintrag(fang: Fang, onBearbeiten: () -> Unit, onLoeschen: (
             if (fang.temperatur != 0.0) Text(
                 "${fang.temperatur}°C  |  Wind ${fang.wind} m/s  |  ${fang.bewoelkung}% Bewölkung",
                 fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (fang.tiefe.isNotBlank()) Text(
-                "Tiefe: ${fang.tiefe}", fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             if (fang.gezeiten.isNotBlank()) Text(
                 "Tide: ${fang.gezeiten}", fontSize = 13.sp,
@@ -1136,8 +1082,7 @@ fun FangListe(
                         bewoelkung = wetter?.bewoelkung ?: 0,
                         fotoPfad = pfad,
                         gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
-                        mondphase = mondphaseBerechnen(verwendetesDatum),
-                        tiefe = wassertiefeLaden(lat, lon)
+                        mondphase = mondphaseBerechnen(verwendetesDatum)
                     ))
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
                         faenge = faengeladen(context)
@@ -1390,8 +1335,7 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                             val marker = Marker(this)
                             marker.position = GeoPoint(fang.latitude, fang.longitude)
                             marker.title = fang.fischart
-                            marker.infoWindow = null  // osmdroid-InfoWindow deaktivieren, Panel wird in Compose verwaltet
-
+                            
                             // Distanz berechnen, falls Standort verfügbar
                             val distanzText = meinePosition?.let { pos ->
                                 val ergebnisse = FloatArray(1)
@@ -1481,10 +1425,6 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                         TextButton(onClick = { selectedFang = null }) { Text("✕") }
                     }
                     Text(fang.datum, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (fang.tiefe.isNotBlank()) Text(
-                        "Tiefe: ${fang.tiefe}", fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                     meinePosition?.let { pos ->
                         val results = FloatArray(2)
                         Location.distanceBetween(pos.latitude, pos.longitude, fang.latitude, fang.longitude, results)
