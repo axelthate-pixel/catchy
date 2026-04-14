@@ -830,6 +830,7 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
     var fotoPfad by remember { mutableStateOf(fang.fotoPfad) }
     var tempFotoDatei: File? by remember { mutableStateOf(null) }
     var wetterNeuLaden by remember { mutableStateOf("") }
+    var tiefeText by remember { mutableStateOf(fang.tiefe) }
 
     val kameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { erfolg ->
         if (erfolg && tempFotoDatei != null) {
@@ -934,6 +935,12 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                 modifier = Modifier.weight(1f), singleLine = true
             )
         }
+        OutlinedTextField(
+            value = tiefeText, onValueChange = { tiefeText = it },
+            label = { Text("Tiefe (m)") },
+            placeholder = { Text("z.B. 3.5 m — leer lassen für automatische Ermittlung") },
+            modifier = Modifier.fillMaxWidth(), singleLine = true
+        )
         WetterNeuLadenPanel(
             latText = latText, lonText = lonText, datum = datum,
             fallbackLat = fang.latitude, fallbackLon = fang.longitude,
@@ -965,7 +972,8 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
                     mondphase = mondphaseBerechnen(datum)
                 )
                 thread {
-                    val neueTiefe = wassertiefeLaden(lat, lon).ifBlank { fang.tiefe }
+                    val neueTiefe = if (tiefeText.isNotBlank()) tiefeText
+                                    else wassertiefeLaden(lat, lon).ifBlank { fang.tiefe }
                     fangAktualisieren(context, aktualisiertFang.copy(tiefe = neueTiefe))
                     android.os.Handler(android.os.Looper.getMainLooper()).post { zeigeListeFuer(fang.id) }
                 }
