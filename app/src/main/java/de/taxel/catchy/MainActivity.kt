@@ -1274,7 +1274,7 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
     }
     thread {
         try {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey"
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=$apiKey"
             val body = JSONObject().put("contents", JSONArray().put(
                 JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
             ))
