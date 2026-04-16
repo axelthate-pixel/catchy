@@ -85,6 +85,20 @@ data class Fang(
     val mondphase: String = ""                 // Mondphase zum Fangzeitpunkt (astronomische Näherung)
 )
 
+// Repräsentiert eine Chat-Nachricht im AI Buddy Gespräch (Issue #13).
+data class ChatNachricht(val rolle: String, val text: String)
+
+// Fasst die aktuellen Umgebungsbedingungen für den AI Buddy zusammen (Issues #13, #14, #15).
+data class BuddyKontext(
+    val datum: String,
+    val lat: Double,
+    val lon: Double,
+    val wetter: Wetter?,
+    val mondphase: String,
+    val gezeiten: String,
+    val pegelInfo: String?
+)
+
 // Lädt alle gespeicherten Fänge aus den SharedPreferences und gibt sie absteigend nach Datum sortiert zurück
 fun faengeladen(context: Context): List<Fang> {
     val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
@@ -1266,18 +1280,29 @@ fun FangListe(
     }
 }
 
-// Ruft eine Angelempfehlung von der Gemini API ab (Hintergrund-Thread).
-fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?) -> Unit) {
-    if (apiKey.isBlank()) {
-        onErgebnis("Fehler: Kein API-Key konfiguriert (local.properties)")
-        return
-    }
+// Sendet eine Chat-Konversation an die Gemini API und gibt die Modellantwort zurück (Issue #13).
+fun geminiChatAbrufen(
+    apiKey: String,
+    verlauf: List<ChatNachricht>,
+    systemPrompt: String,
+    onErgebnis: (String?) -> Unit
+) {
+    if (apiKey.isBlank()) { onErgebnis("Fehler: Kein API-Key konfiguriert"); return }
     thread {
         try {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
-            val body = JSONObject().put("contents", JSONArray().put(
-                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))
-            ))
+            val contents = JSONArray()
+            verlauf.forEach { msg ->
+                contents.put(
+                    JSONObject()
+                        .put("role", msg.rolle)
+                        .put("parts", JSONArray().put(JSONObject().put("text", msg.text)))
+                )
+            }
+            val body = JSONObject()
+                .put("contents", contents)
+                .put("systemInstruction", JSONObject()
+                    .put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
@@ -1287,8 +1312,7 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
             if (statusCode != 200) {
                 val errorBody = conn.errorStream?.bufferedReader()?.readText() ?: "(kein Body)"
                 android.util.Log.e(TAG, "Gemini HTTP $statusCode: $errorBody")
-                onErgebnis("Fehler: HTTP $statusCode\n$errorBody")
-                return@thread
+                onErgebnis("Fehler: HTTP $statusCode"); return@thread
             }
             val response = conn.inputStream.bufferedReader().readText()
             val text = JSONObject(response)
@@ -1306,120 +1330,274 @@ fun geminiEmpfehlungAbrufen(apiKey: String, prompt: String, onErgebnis: (String?
     }
 }
 
-// Erstellt den Prompt für die Angelempfehlung aus aktuellen Bedingungen und Fanghistorie.
-fun angelEmpfehlungPromptErstellen(
-    datum: String, lat: Double, lon: Double,
-    wetter: Wetter?, mondphase: String, gezeiten: String, letzeFaenge: List<Fang>
+// Ruft Pegelstand und Wassertemperatur der nächsten WSV-Messstation ab (Issue #14).
+fun pegelstandAbrufen(lat: Double, lon: Double, onErgebnis: (String?) -> Unit) {
+    thread {
+        try {
+            val conn = java.net.URL(
+                "https://pegelonline.wsv.de/webservices/rest-api/v2/stations.json"
+            ).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 15000
+            conn.readTimeout = 15000
+            val stations = JSONArray(conn.inputStream.bufferedReader().readText())
+            var minDist = Float.MAX_VALUE
+            var naechsteUuid = ""
+            var naechsterName = ""
+            val distArr = FloatArray(1)
+            for (i in 0 until stations.length()) {
+                val s = stations.getJSONObject(i)
+                val sLat = s.optDouble("latitude", 0.0)
+                val sLon = s.optDouble("longitude", 0.0)
+                if (sLat == 0.0 || sLon == 0.0) continue
+                Location.distanceBetween(lat, lon, sLat, sLon, distArr)
+                if (distArr[0] < minDist) {
+                    minDist = distArr[0]
+                    naechsteUuid = s.getString("uuid")
+                    val waterName = s.optJSONObject("water")?.optString("longname", "") ?: ""
+                    naechsterName = buildString {
+                        append(s.optString("longname", s.optString("shortname", "?")))
+                        if (waterName.isNotBlank()) append(" / $waterName")
+                    }
+                }
+            }
+            if (naechsteUuid.isBlank() || minDist > 50000f) { onErgebnis(null); return@thread }
+            val base = "https://pegelonline.wsv.de/webservices/rest-api/v2/stations/$naechsteUuid"
+            val pegelConn = java.net.URL("$base/W/currentmeasurement.json")
+                .openConnection() as java.net.HttpURLConnection
+            pegelConn.connectTimeout = 5000
+            pegelConn.readTimeout = 5000
+            val pegelData = JSONObject(pegelConn.inputStream.bufferedReader().readText())
+            val pegel = "${pegelData.getDouble("value").toInt()} ${pegelData.optString("unit", "cm")}"
+            val tempText = try {
+                val tConn = java.net.URL("$base/WT/currentmeasurement.json")
+                    .openConnection() as java.net.HttpURLConnection
+                tConn.connectTimeout = 5000
+                tConn.readTimeout = 5000
+                val tData = JSONObject(tConn.inputStream.bufferedReader().readText())
+                ", ${String.format(Locale.US, "%.1f", tData.getDouble("value"))}°C"
+            } catch (e: java.io.IOException) {
+                android.util.Log.d(TAG, "Wassertemperatur nicht verfügbar: ${e.message}")
+                ""
+            }
+            onErgebnis("$naechsterName: $pegel$tempText")
+        } catch (e: java.io.IOException) {
+            android.util.Log.e(TAG, "Pegelstand fehlgeschlagen", e); onErgebnis(null)
+        } catch (e: org.json.JSONException) {
+            android.util.Log.e(TAG, "Pegelstand JSON fehlgeschlagen", e); onErgebnis(null)
+        }
+    }
+}
+
+// Erstellt den Systemkontext-Prompt für den AI Buddy Chat (Issues #13, #14, #15).
+fun buddySystemPromptErstellen(
+    kontext: BuddyKontext,
+    naheFaenge: List<Fang>,
+    saisonFaenge: List<Fang>
 ): String = buildString {
     appendLine("Du bist ein erfahrener Angelexperte für europäisches Spinnfischen.")
-    appendLine("Gib konkrete, praxisnahe Empfehlungen für den heutigen Angeltag auf Deutsch (max. 250 Wörter).")
+    appendLine("Führe ein Beratungsgespräch auf Deutsch (max. 3-4 Sätze pro Antwort).")
+    appendLine("Stelle zu Beginn Fragen nach Gewässer, Zielfisch und geplanter Angeldauer.")
     appendLine("\n## Aktuelle Bedingungen")
-    appendLine("Datum/Zeit: $datum")
-    appendLine("Position: ${String.format(Locale.US, "%.4f", lat)}, ${String.format(Locale.US, "%.4f", lon)}")
-    wetter?.let {
-        appendLine("Temperatur: ${it.temperatur}°C | Wind: ${it.wind} m/s | Luftdruck: ${it.luftdruck} hPa | Bewölkung: ${it.bewoelkung}%")
+    appendLine("Datum/Zeit: ${kontext.datum}")
+    appendLine("Position: ${String.format(Locale.US, "%.4f", kontext.lat)}, ${String.format(Locale.US, "%.4f", kontext.lon)}")
+    kontext.wetter?.let {
+        appendLine("Wetter: ${it.temperatur}°C | Wind: ${it.wind} m/s | Luftdruck: ${it.luftdruck} hPa | Bewölkung: ${it.bewoelkung}%")
     }
-    if (mondphase.isNotBlank()) appendLine("Mondphase: $mondphase")
-    if (gezeiten.isNotBlank()) appendLine("Gezeiten: $gezeiten")
-    appendLine("\n## Zielarten\nZander, Hecht, Barsch, Rapfen, Forellenartige")
-    if (letzeFaenge.isNotEmpty()) {
-        appendLine("\n## Meine letzten Fänge")
-        letzeFaenge.take(10).forEach { f ->
+    if (kontext.mondphase.isNotBlank()) appendLine("Mondphase: ${kontext.mondphase}")
+    if (kontext.gezeiten.isNotBlank()) appendLine("Gezeiten: ${kontext.gezeiten}")
+    if (kontext.pegelInfo != null) appendLine("Pegelstand: ${kontext.pegelInfo}")
+    if (naheFaenge.isNotEmpty()) {
+        appendLine("\n## Meine Fänge in dieser Region")
+        naheFaenge.take(10).forEach { f ->
             append("- ${f.fischart}")
             if (f.laenge.isNotBlank()) append(", ${f.laenge} cm")
             append(", ${f.datum}")
-            if (f.temperatur != 0.0) append(", ${f.temperatur}°C, Wind ${f.wind} m/s")
+            if (f.temperatur != 0.0) append(", ${f.temperatur}°C")
             appendLine()
         }
     }
-    appendLine("\n## Bitte empfehle:")
-    appendLine("1. Aktivitätsbewertung der Zielarten")
-    appendLine("2. Beste Zeitfenster heute")
-    appendLine("3. Technik und Tiefe")
-    appendLine("4. Köder")
-    appendLine("5. Besonderheiten aus meiner Fanghistorie")
+    if (saisonFaenge.isNotEmpty()) {
+        appendLine("\n## Meine Fänge zur selben Jahreszeit in anderen Jahren")
+        saisonFaenge.take(5).forEach { f ->
+            append("- ${f.fischart}")
+            if (f.laenge.isNotBlank()) append(", ${f.laenge} cm")
+            append(", ${f.datum}")
+            appendLine()
+        }
+    }
 }
 
-// AI Buddy Screen — KI-basierte Angelempfehlungen (Issue #11)
+// AI Buddy Screen — KI-gestützter Angelberatungs-Chat (Issues #11, #13, #14, #15)
 @Composable
 fun AiBuddyScreen(zurueck: () -> Unit) {
     val context = LocalContext.current
-    var gpsStatus by remember { mutableStateOf("wird ermittelt...") }
     var aktuellePosition by remember { mutableStateOf<Location?>(null) }
     var aktuellesWetter by remember { mutableStateOf<Wetter?>(null) }
-    var empfehlung by remember { mutableStateOf("") }
-    var ladeStatus by remember { mutableStateOf("") }
+    var pegelInfo by remember { mutableStateOf<String?>(null) }
+    var verlauf by remember { mutableStateOf(listOf<ChatNachricht>()) }
+    var eingabe by remember { mutableStateOf("") }
+    var wartet by remember { mutableStateOf(false) }
+    var chatGestartet by remember { mutableStateOf(false) }
     val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
     val datum = remember { SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date()) }
+    val listState = rememberLazyListState()
+
+    fun systemKontext(pos: Location) = BuddyKontext(
+        datum, pos.latitude, pos.longitude, aktuellesWetter,
+        mondphaseBerechnen(datum), gezeiteBerechnen(datum, pos.latitude, pos.longitude), pegelInfo
+    )
+
+    fun naheFaenge(alle: List<Fang>, pos: Location): List<Fang> {
+        val d = FloatArray(1)
+        return alle.filter { f ->
+            if (f.latitude == 0.0 && f.longitude == 0.0) return@filter false
+            Location.distanceBetween(pos.latitude, pos.longitude, f.latitude, f.longitude, d)
+            d[0] <= 5000f
+        }
+    }
+
+    fun saisonFaenge(alle: List<Fang>, nah: List<Fang>): List<Fang> {
+        val aktMonat = Calendar.getInstance().get(Calendar.MONTH) + 1
+        val aktJahr = Calendar.getInstance().get(Calendar.YEAR)
+        return alle.filter { f ->
+            if (f in nah) return@filter false
+            try {
+                val fMonat = f.datum.substring(3, 5).toInt()
+                val fJahr = f.datum.substring(6, 10).toInt()
+                fJahr < aktJahr && Math.abs(fMonat - aktMonat) <= 1
+            } catch (e: NumberFormatException) { false }
+        }
+    }
+
+    fun chatStarten(pos: Location) {
+        if (chatGestartet) return
+        chatGestartet = true
+        val start = listOf(ChatNachricht("user", "Starte die Beratung."))
+        verlauf = start
+        wartet = true
+        val alle = faengeladen(context)
+        val nah = naheFaenge(alle, pos)
+        val prompt = buddySystemPromptErstellen(systemKontext(pos), nah, saisonFaenge(alle, nah))
+        geminiChatAbrufen(BuildConfig.GEMINI_API_KEY, start, prompt) { antwort ->
+            verlauf = start + ChatNachricht("model", antwort ?: "Keine Antwort erhalten.")
+            wartet = false
+        }
+    }
+
+    fun nachrichtSenden(pos: Location) {
+        val text = eingabe.trim()
+        if (text.isBlank() || wartet) return
+        val neuerVerlauf = verlauf + ChatNachricht("user", text)
+        verlauf = neuerVerlauf
+        eingabe = ""
+        wartet = true
+        val alle = faengeladen(context)
+        val nah = naheFaenge(alle, pos)
+        val prompt = buddySystemPromptErstellen(systemKontext(pos), nah, saisonFaenge(alle, nah))
+        geminiChatAbrufen(BuildConfig.GEMINI_API_KEY, neuerVerlauf, prompt) { antwort ->
+            verlauf = neuerVerlauf + ChatNachricht("model", antwort ?: "Keine Antwort erhalten.")
+            wartet = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         val hatBerechtigung = ContextCompat.checkSelfPermission(
             context, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
-        if (hatBerechtigung) {
-            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
-                .addOnSuccessListener { loc ->
-                    if (loc != null) {
-                        aktuellePosition = loc
-                        gpsStatus = "${String.format(Locale.US, "%.4f", loc.latitude)}, ${String.format(Locale.US, "%.4f", loc.longitude)}"
-                        wetterAbrufen(loc.latitude, loc.longitude) { wetter -> aktuellesWetter = wetter }
-                    } else gpsStatus = "Kein Signal"
-                }
-        } else gpsStatus = "Berechtigung fehlt"
+        if (!hatBerechtigung) return@LaunchedEffect
+        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null)
+            .addOnSuccessListener { loc ->
+                if (loc == null) return@addOnSuccessListener
+                aktuellePosition = loc
+                wetterAbrufen(loc.latitude, loc.longitude) { w -> aktuellesWetter = w }
+                pegelstandAbrufen(loc.latitude, loc.longitude) { p -> pegelInfo = p }
+            }
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().statusBarsPadding().padding(16.dp).verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    LaunchedEffect(aktuellePosition) { aktuellePosition?.let { chatStarten(it) } }
+
+    LaunchedEffect(verlauf.size) {
+        if (verlauf.isNotEmpty()) listState.animateScrollToItem(verlauf.size - 1)
+    }
+
+    val sichtbareNachrichten = verlauf
+        .filter { it.rolle != "user" || it.text != "Starte die Beratung." }
+
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("AI Buddy", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("AI Buddy", fontSize = 22.sp, fontWeight = FontWeight.Bold)
             TextButton(onClick = zurueck) { Text("Zurück") }
         }
-        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.medium) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("GPS: $gpsStatus", fontSize = 13.sp)
-                val wetterText = if (aktuellesWetter != null) {
-                    "${aktuellesWetter!!.temperatur}°C · ${aktuellesWetter!!.wind} m/s · ${aktuellesWetter!!.luftdruck} hPa"
-                } else "wird geladen..."
-                Text("Wetter: $wetterText", fontSize = 13.sp)
-            }
-        }
-        Button(
-            onClick = {
-                val pos = aktuellePosition ?: return@Button
-                ladeStatus = "Empfehlung wird erstellt..."
-                empfehlung = ""
-                val faenge = faengeladen(context)
-                val prompt = angelEmpfehlungPromptErstellen(
-                    datum, pos.latitude, pos.longitude, aktuellesWetter,
-                    mondphaseBerechnen(datum), gezeiteBerechnen(datum, pos.latitude, pos.longitude), faenge
-                )
-                geminiEmpfehlungAbrufen(BuildConfig.GEMINI_API_KEY, prompt) { ergebnis ->
-                    empfehlung = ergebnis ?: "Empfehlung konnte nicht geladen werden."
-                    ladeStatus = ""
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = aktuellePosition != null
-        ) { Text(if (aktuellePosition == null) "Warte auf GPS..." else "Empfehlung anfordern") }
-        if (ladeStatus.isNotBlank()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                Text(ladeStatus, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        if (empfehlung.isNotBlank()) {
+        if (aktuellePosition == null) {
             Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                shape = MaterialTheme.shapes.medium
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                shape = MaterialTheme.shapes.small
             ) {
-                Text(empfehlung, modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSecondaryContainer)
+                Text("GPS wird ermittelt...", modifier = Modifier.padding(12.dp), fontSize = 13.sp)
+            }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(sichtbareNachrichten) { nachricht ->
+                val istNutzer = nachricht.rolle == "user"
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = if (istNutzer) Arrangement.End else Arrangement.Start
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(0.85f),
+                        color = if (istNutzer) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.medium
+                    ) {
+                        Text(
+                            text = nachricht.text,
+                            modifier = Modifier.padding(12.dp),
+                            color = if (istNutzer) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+            if (wartet) {
+                item {
+                    Row(
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text("...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+        aktuellePosition?.let { pos ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = eingabe,
+                    onValueChange = { eingabe = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Nachricht...") },
+                    maxLines = 3
+                )
+                Button(
+                    onClick = { nachrichtSenden(pos) },
+                    enabled = eingabe.isNotBlank() && !wartet
+                ) { Text("Senden") }
             }
         }
     }
