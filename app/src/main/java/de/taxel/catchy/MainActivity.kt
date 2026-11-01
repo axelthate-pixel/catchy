@@ -234,21 +234,31 @@ fun gpxInhalt(faenge: List<Fang>): String {
     // GPX verlangt die Zeit in UTC (ISO 8601)
     val zeitFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
     zeitFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+    val kurzDatum = SimpleDateFormat("dd.MM.yy", Locale.GERMANY)
+    kurzDatum.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
     // Nur Fänge mit gültigem GPS-Eintrag exportieren
     val fangeMitGps = faenge.filter { it.latitude != 0.0 }
     for (fang in fangeMitGps) {
         val lat = String.format(Locale.US, "%.6f", fang.latitude)
         val lon = String.format(Locale.US, "%.6f", fang.longitude)
-        val name = fang.fischart.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val zeitpunkt = fangZeitpunktMillis(fang.datum)
+        // Kartenplotter (z. B. Lowrance) zeigen nur den Namen neben der Markierung – daher Länge und Datum mit
+        // aufnehmen, damit sich gleiche Fischarten unterscheiden lassen: "Hecht 60cm 07.11.24"
+        val name = buildString {
+            append(fang.fischart)
+            if (fang.laenge.isNotBlank()) append(" ${fang.laenge}cm")
+            if (zeitpunkt != null) append(" ${kurzDatum.format(Date(zeitpunkt))}")
+        }.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         val beschreibung = buildString {
             append(fang.datum)
             if (fang.laenge.isNotBlank()) append(" | ${fang.laenge} cm")
-            if (fang.temperatur != 0.0) append(" | ${fang.temperatur}°C")
+            // Ohne Gradzeichen, da nicht jeder Kartenplotter es darstellen kann
+            if (fang.temperatur != 0.0) append(" | ${fang.temperatur} C")
             if (fang.wind != 0.0) append(" | Wind ${fang.wind} m/s")
         }.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         sb.appendLine("""  <wpt lat="$lat" lon="$lon">""")
         // Laut GPX-Schema steht <time> vor <name>
-        fangZeitpunktMillis(fang.datum)?.let { sb.appendLine("""    <time>${zeitFormat.format(Date(it))}</time>""") }
+        zeitpunkt?.let { sb.appendLine("""    <time>${zeitFormat.format(Date(it))}</time>""") }
         sb.appendLine("""    <name>$name</name>""")
         sb.appendLine("""    <desc>$beschreibung</desc>""")
         sb.appendLine("""    <sym>Fishing Hot Spot Facility</sym>""")
