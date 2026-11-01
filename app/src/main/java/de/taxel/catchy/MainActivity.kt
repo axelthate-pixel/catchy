@@ -440,9 +440,55 @@ fun exifDatenLesen(context: Context, uri: Uri): Triple<String, Double, Double> {
                 SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
             }
         } else SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(Date())
+        // Letzter Versuch: Cloud-Fotos aus Google Photos kommen ohne Standort. Lokale Kopie mit gleicher
+        // Aufnahmezeit suchen und deren GPS übernehmen (Issue #22)
+        if (lat == 0.0 && lon == 0.0 && datumRoh.isNotBlank()) {
+            val aufnahmeMillis = try {
+                val eingang = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.GERMANY)
+                if (offsetRoh.isNotBlank()) eingang.timeZone = java.util.TimeZone.getTimeZone("GMT$offsetRoh")
+                val subsec = exif.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL)
+                    ?.take(3)?.padEnd(3, '0')?.toLongOrNull() ?: 0L
+                (eingang.parse(datumRoh)?.time ?: 0L) + subsec
+            } catch (e: java.text.ParseException) { android.util.Log.e(TAG, "Aufnahmezeit parsen fehlgeschlagen", e); 0L }
+            gpsAusLokalerKopie(context, aufnahmeMillis)?.let { (kopieLat, kopieLon) -> lat = kopieLat; lon = kopieLon }
+        }
         stream.close()
         return Triple(datum, lat, lon)
     } catch (e: Exception) { android.util.Log.e(TAG, "EXIF lesen fehlgeschlagen", e); return Triple("", 0.0, 0.0) }
+}
+
+// Sucht in der MediaStore ein lokales Foto mit (fast) gleicher Aufnahmezeit und liest dessen GPS aus dem Original.
+// Nötig, weil die Fotoauswahl bearbeitete Fotos aus der Google-Photos-Cloud liefert und dabei den Standort entfernt.
+// Funktioniert nur mit Vollzugriff auf Fotos (READ_MEDIA_IMAGES bzw. READ_EXTERNAL_STORAGE), sonst null (Issue #22).
+@Suppress("TooGenericExceptionCaught")
+fun gpsAusLokalerKopie(context: Context, aufnahmeMillis: Long): Pair<Double, Double>? {
+    val berechtigung = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+        Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+    if (aufnahmeMillis <= 0L ||
+        ContextCompat.checkSelfPermission(context, berechtigung) != PackageManager.PERMISSION_GRANTED
+    ) return null
+    return try {
+        val toleranz = 1500L
+        val kandidaten = mutableListOf<Pair<Long, Long>>() // MediaStore-ID zu Abstand der Aufnahmezeit
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN),
+            "${MediaStore.Images.Media.DATE_TAKEN} BETWEEN ? AND ?",
+            arrayOf((aufnahmeMillis - toleranz).toString(), (aufnahmeMillis + toleranz).toString()),
+            null
+        )?.use { c -> while (c.moveToNext()) kandidaten.add(c.getLong(0) to kotlin.math.abs(c.getLong(1) - aufnahmeMillis)) }
+        // Nächstliegende Aufnahmezeit zuerst; erstes Foto mit GPS gewinnt
+        kandidaten.sortedBy { it.second }.firstNotNullOfOrNull { (id, _) ->
+            var mediaUri = android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                mediaUri = MediaStore.setRequireOriginal(mediaUri)
+            }
+            context.contentResolver.openInputStream(mediaUri)?.use { eingabe ->
+                val latLon = FloatArray(2)
+                if (ExifInterface(eingabe).getLatLong(latLon)) latLon[0].toDouble() to latLon[1].toDouble() else null
+            }
+        }
+    } catch (e: Exception) { android.util.Log.e(TAG, "Lokale Kopie für GPS nicht lesbar", e); null }
 }
 
 // Erstellt eine leere temporäre JPG-Datei im externen Bilderverzeichnis für die Kamera-Aufnahme
@@ -1166,13 +1212,14 @@ fun FangListe(
                     if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
                 }
                 append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
+                if (mitGps < erfolgreich) append("\nKein GPS? Bei Fotos aus der Google-Photos-Cloud hilft der Zugriff auf alle Fotos.")
             }
             android.os.Handler(android.os.Looper.getMainLooper()).post { exportMeldung = meldung }
         }
     }
 
     val mediaBerechtigungsLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         val uris = pendingGalerieUris
         if (uris.isNotEmpty()) {
@@ -1185,15 +1232,20 @@ fun FangListe(
         ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         if (uris.isNotEmpty()) {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                val mediaPermGranted = ContextCompat.checkSelfPermission(
-                    context, Manifest.permission.ACCESS_MEDIA_LOCATION
-                ) != PackageManager.PERMISSION_GRANTED
-                if (mediaPermGranted) {
-                    pendingGalerieUris = uris
-                    mediaBerechtigungsLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
-                    return@rememberLauncherForActivityResult
-                }
+            // ACCESS_MEDIA_LOCATION für GPS aus EXIF; Vollzugriff auf Fotos für die GPS-Suche in lokalen Kopien
+            // von Cloud-Fotos (Issue #22) – Vollzugriff wird nur einmal angefragt, um nicht bei jedem Import zu nerven
+            val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
+            val vollzugriff = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
+                Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
+            val fehlend = buildList {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) add(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                if (!prefs.getBoolean("vollzugriffGefragt", false)) add(vollzugriff)
+            }.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+            if (fehlend.isNotEmpty()) {
+                if (vollzugriff in fehlend) prefs.edit().putBoolean("vollzugriffGefragt", true).apply()
+                pendingGalerieUris = uris
+                mediaBerechtigungsLauncher.launch(fehlend.toTypedArray())
+                return@rememberLauncherForActivityResult
             }
             galerieImportStarten(uris)
         }
