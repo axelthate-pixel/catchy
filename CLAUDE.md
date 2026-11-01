@@ -23,12 +23,22 @@
 
 ## Architektur
 
-- **Monolithisch:** Die gesamte App-Logik und alle UI-Screens befinden sich in `app/src/main/java/de/taxel/catchy/MainActivity.kt` (~1300 Zeilen)
+- **Monolithisch:** Die gesamte App-Logik und alle UI-Screens befinden sich in `app/src/main/java/de/taxel/catchy/MainActivity.kt` (~1500 Zeilen)
 - **Kein MVVM:** Kein ViewModel, kein Repository-Pattern — bewusste Entscheidung für Einfachheit
 - **State:** Compose `mutableStateOf()` + `remember {}` direkt in Composables
 - **Navigation:** String-basiertes Routing im Haupt-Composable `AngelApp()`
 
 **Screens:** `liste` → `erfassung` → `bearbeiten` → `karte`
+
+**Nicht mehr Teil der App:** Der AI Buddy (Gemini-Chat, Pegelstand, Fanghistorie-Empfehlungen) wurde im November 2026
+vollständig entfernt. Keine Gemini-/LLM-Anbindung und keinen `GEMINI_API_KEY` wieder einführen ohne explizite Aufforderung.
+
+## Arbeitsweise
+
+- Nie direkt auf `main` arbeiten: pro Issue ein Branch (`fix/…`, `feature/…`, `chore/…`), Abschluss per PR
+- Vor jedem Commit `./gradlew detekt` und `./gradlew test`
+- GitHub Issues erst nach Abnahme durch den User schließen
+- GitHub-Konto: `axelthate-pixel` / axel.thate@gmail.com
 
 ## Code-Konventionen
 
