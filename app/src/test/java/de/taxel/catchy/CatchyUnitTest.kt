@@ -100,34 +100,13 @@ class CatchyUnitTest {
     // GPX ist ein XML-Standard für GPS-Wegpunkte (Garmin, komoot, …).
     // ─────────────────────────────────────────────────────────────
 
-    /** Spiegelt die GPX-Baulogik aus der App wider. */
-    private fun gpxErstellen(faenge: List<Fang>): String {
-        val sb = StringBuilder()
-        sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
-        sb.appendLine("""<gpx version="1.1" creator="Catchy" xmlns="http://www.topografix.com/GPX/1/1">""")
-        for (fang in faenge.filter { it.latitude != 0.0 }) {
-            val lat  = String.format(Locale.US, "%.6f", fang.latitude)
-            val lon  = String.format(Locale.US, "%.6f", fang.longitude)
-            val name = fang.fischart
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            sb.appendLine("""  <wpt lat="$lat" lon="$lon">""")
-            sb.appendLine("""    <name>$name</name>""")
-            sb.appendLine("""    <sym>Fishing Hot Spot Facility</sym>""")
-            sb.appendLine("""  </wpt>""")
-        }
-        sb.appendLine("""</gpx>""")
-        return sb.toString()
-    }
-
     @Test
     fun gpxEnthaeltKorrekteKoordinaten() {
         val faenge = listOf(
             Fang(id = 1L, fischart = "Hecht", laenge = "60", notizen = "", datum = "08.03.2026 15:50",
                 latitude = 53.5753, longitude = 10.0153)
         )
-        val gpx = gpxErstellen(faenge)
+        val gpx = gpxInhalt(faenge)
         assertTrue(gpx.contains("""lat="53.575300""""))
         assertTrue(gpx.contains("""lon="10.015300""""))
         assertTrue(gpx.contains("<name>Hecht</name>"))
@@ -141,7 +120,7 @@ class CatchyUnitTest {
             Fang(id = 1L, fischart = "Hecht", laenge = "", notizen = "", datum = "08.03.2026 15:50",
                 latitude = 0.0, longitude = 0.0)
         )
-        val gpx = gpxErstellen(faenge)
+        val gpx = gpxInhalt(faenge)
         assertFalse("Fang ohne GPS darf keinen <wpt>-Eintrag erzeugen", gpx.contains("<wpt"))
     }
 
@@ -153,7 +132,7 @@ class CatchyUnitTest {
             Fang(id = 1L, fischart = "Hecht & Zander <groß>", laenge = "", notizen = "", datum = "08.03.2026 15:50",
                 latitude = 53.5753, longitude = 10.0153)
         )
-        val gpx = gpxErstellen(faenge)
+        val gpx = gpxInhalt(faenge)
         assertTrue(gpx.contains("&amp;"))
         assertTrue(gpx.contains("&lt;"))
         assertTrue(gpx.contains("&gt;"))
@@ -169,7 +148,7 @@ class CatchyUnitTest {
             Fang(id = 2L, fischart = "Zander", laenge = "", notizen = "", datum = "08.03.2026 15:50", latitude = 53.86, longitude = 8.70),
             Fang(id = 3L, fischart = "Barsch", laenge = "", notizen = "", datum = "15.03.2026 12:30", latitude = 0.0,   longitude = 0.0),
         )
-        val gpx = gpxErstellen(faenge)
+        val gpx = gpxInhalt(faenge)
         val wptAnzahl = Regex("<wpt ").findAll(gpx).count()
         assertEquals("Nur Fänge mit GPS dürfen exportiert werden", 2, wptAnzahl)
         assertTrue(gpx.contains("<name>Hecht</name>"))
@@ -185,7 +164,7 @@ class CatchyUnitTest {
             Fang(id = 1L, fischart = "Thunfisch", laenge = "", notizen = "", datum = "08.03.2026 15:50",
                 latitude = 0.5, longitude = 179.999)
         )
-        val gpx = gpxErstellen(faenge)
+        val gpx = gpxInhalt(faenge)
         assertTrue(gpx.contains("""lon="179.999000""""))
         assertTrue(gpx.contains("""lat="0.500000""""))
     }
@@ -194,11 +173,72 @@ class CatchyUnitTest {
     fun gpxMitLeererListeIstValidesLeeresDokument() {
         // Auch ohne Fänge muss die GPX-Datei strukturell valide XML sein —
         // sonst schlägt der Import in Navigationsgeräten fehl.
-        val gpx = gpxErstellen(emptyList())
+        val gpx = gpxInhalt(emptyList())
         assertTrue(gpx.contains("""<?xml version="1.0""""))
         assertTrue(gpx.contains("<gpx"))
         assertTrue(gpx.contains("</gpx>"))
         assertFalse("Leeres GPX darf keinen <wpt>-Eintrag enthalten", gpx.contains("<wpt"))
+    }
+
+    @Test
+    fun gpxWegpunktEnthaeltUtcZeitVorDemNamen() {
+        // 07.11.2024 17:05 deutscher Winterzeit (MEZ, UTC+1) = 16:05 UTC.
+        // Laut GPX-1.1-Schema muss <time> vor <name> stehen.
+        val faenge = listOf(
+            Fang(id = 1L, fischart = "Barsch", laenge = "", notizen = "", datum = "07.11.2024 17:05",
+                latitude = 51.658012, longitude = 4.208508)
+        )
+        val gpx = gpxInhalt(faenge)
+        assertTrue(gpx.contains("<time>2024-11-07T16:05:00Z</time>"))
+        assertTrue("<time> muss vor <name> stehen", gpx.indexOf("<time>") < gpx.indexOf("<name>"))
+    }
+
+    @Test
+    fun gpxZeitBeruecksichtigtSommerzeit() {
+        // 15.07.2025 08:30 MESZ (UTC+2) = 06:30 UTC
+        val faenge = listOf(
+            Fang(id = 1L, fischart = "Hecht", laenge = "", notizen = "", datum = "15.07.2025 08:30",
+                latitude = 51.63, longitude = 4.22)
+        )
+        assertTrue(gpxInhalt(faenge).contains("<time>2025-07-15T06:30:00Z</time>"))
+    }
+
+    @Test
+    fun gpxOhneLesbaresDatumLaesstTimeWeg() {
+        val faenge = listOf(
+            Fang(id = 1L, fischart = "Hecht", laenge = "", notizen = "", datum = "unbekannt",
+                latitude = 51.63, longitude = 4.22)
+        )
+        val gpx = gpxInhalt(faenge)
+        assertTrue(gpx.contains("<wpt "))
+        assertFalse("Ohne gültiges Datum darf kein <time> entstehen", gpx.contains("<time>"))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 3b. Wetter zur Fanguhrzeit
+    //
+    // Open-Meteo liefert 24 Stundenwerte pro Tag (Ortszeit); verwendet wird der Wert zur Fangstunde.
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    fun wetterStundenIndexEntsprichtFangstunde() {
+        assertEquals(8, wetterStundenIndex("07.11.2025 08:28"))
+        assertEquals(17, wetterStundenIndex("05.11.2025 17:42"))
+        assertEquals(0, wetterStundenIndex("01.01.2025 00:15"))
+        assertEquals(23, wetterStundenIndex("31.12.2025 23:59"))
+    }
+
+    @Test
+    fun wetterStundenIndexFaelltOhneUhrzeitAufMittagZurueck() {
+        assertEquals(12, wetterStundenIndex("07.11.2025"))
+        assertEquals(12, wetterStundenIndex(""))
+        assertEquals(12, wetterStundenIndex("07.11.2025 xx:yy"))
+    }
+
+    @Test
+    fun fangZeitpunktMillisUngueltigesDatumIstNull() {
+        assertEquals(null, fangZeitpunktMillis("kein Datum"))
+        assertNotNull(fangZeitpunktMillis("07.11.2024 17:05"))
     }
 
     // ─────────────────────────────────────────────────────────────
