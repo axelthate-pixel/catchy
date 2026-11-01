@@ -19,3 +19,7 @@ replay_pid*.log
 keystore.properties
 *.jks
 *.keystore
+
+# Claude Code (lokal)
+.claude/settings.local.json
+.claude/worktrees/
