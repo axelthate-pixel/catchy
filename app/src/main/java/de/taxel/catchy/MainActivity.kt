@@ -546,9 +546,31 @@ fun uriZuPfad(context: Context, uri: Uri, suffix: Int = 0): String {
         while (w > maxSeite * 2 || h > maxSeite * 2) { sampleSize *= 2; w /= 2; h /= 2 }
 
         val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
-        val bitmap: android.graphics.Bitmap? = context.contentResolver.openInputStream(uri)?.use {
+        val ausBitmapFactory: android.graphics.Bitmap? = context.contentResolver.openInputStream(uri)?.use {
             android.graphics.BitmapFactory.decodeStream(it, null, opts)
-        } ?: if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        }
+        // ImageDecoder wendet die EXIF-Ausrichtung selbst an, BitmapFactory nicht. Da das neu gespeicherte
+        // JPEG kein Orientation-Tag mehr hat, werden die Pixel hier gedreht bzw. gespiegelt.
+        val gedreht = ausBitmapFactory?.let { original ->
+            val ausrichtung = context.contentResolver.openInputStream(uri)?.use {
+                ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+            val matrix = android.graphics.Matrix()
+            when (ausrichtung) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+                ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+            }
+            if (matrix.isIdentity) original
+            else android.graphics.Bitmap.createBitmap(original, 0, 0, original.width, original.height, matrix, true)
+                .also { if (it !== original) original.recycle() }
+        }
+        val bitmap: android.graphics.Bitmap? = gedreht
+            ?: if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             try {
                 val src = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
                 android.graphics.ImageDecoder.decodeBitmap(src) { dec, _, _ ->
