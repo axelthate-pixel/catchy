@@ -16,10 +16,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import androidx.test.filters.SdkSuppress
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * Instrumented Tests für die Catchy-App.
@@ -596,5 +599,143 @@ class CatchyInstrumentedTest {
         assertTrue("Importierte Datei muss existieren", datei.exists())
         assertTrue("Importierte Datei darf nicht leer sein", datei.length() > 0)
         testDateien.add(datei)
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 6. Regressionstests für behobene Bugs
+    //
+    // Diese Tests stellen sicher, dass bereits behobene Fehler nicht
+    // wieder eingeführt werden. Jeder Test ist einem konkreten GitHub-
+    // Issue zugeordnet und reproduziert genau die ursprüngliche Situation,
+    // die zum Bug geführt hat.
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    fun paralleleFangspeichernVerlierenKeineEinträge() {
+        // Regression für Issue #21: Race Condition beim parallelen Galerie-Import.
+        //
+        // 50 Threads speichern gleichzeitig je einen Fang. Ohne Synchronisierung
+        // (synchronized(speicherLock)) überschreiben sich die Writes gegenseitig:
+        // Thread A liest [1, 2], Thread B liest [1, 2], A schreibt [1, 2, A],
+        // B schreibt [1, 2, B] — A ist verloren. Nach dem Fix müssen alle 50
+        // Einträge im Speicher ankommen.
+        val anzahl = 50
+        val latch = CountDownLatch(anzahl)
+        repeat(anzahl) { i ->
+            Thread {
+                fangspeichern(context, Fang(
+                    id = i.toLong() + 1, fischart = "Fisch_$i",
+                    laenge = "", notizen = "", datum = "01.01.2026 10:00"
+                ))
+                latch.countDown()
+            }.start()
+        }
+        assertTrue("Alle Threads müssen rechtzeitig fertig sein", latch.await(10, TimeUnit.SECONDS))
+        assertEquals("Race Condition: Alle $anzahl Fänge müssen gespeichert sein",
+            anzahl, faengeladen(context).size)
+    }
+
+    @Test
+    fun paralleleFangAktualisierenVerlierenKeineÄnderungen() {
+        // Regression für Issue #21: Race Condition bei paralleler Fischart-Aktualisierung.
+        //
+        // 20 Fänge werden gespeichert, danach gleichzeitig von 20 Threads aktualisiert.
+        // Ohne Synchronisierung gehen Aktualisierungen verloren (letzter Writer gewinnt).
+        // Nach dem Fix müssen alle 20 Einträge die neue Fischart tragen.
+        val anzahl = 20
+        repeat(anzahl) { i ->
+            fangspeichern(context, Fang(
+                id = i.toLong() + 1, fischart = "Alt",
+                laenge = "", notizen = "", datum = "01.01.2026 10:00"
+            ))
+        }
+        val latch = CountDownLatch(anzahl)
+        repeat(anzahl) { i ->
+            Thread {
+                fangAktualisieren(context, Fang(
+                    id = i.toLong() + 1, fischart = "Neu_$i",
+                    laenge = "", notizen = "", datum = "01.01.2026 10:00"
+                ))
+                latch.countDown()
+            }.start()
+        }
+        assertTrue("Alle Aktualisierungen müssen rechtzeitig fertig sein",
+            latch.await(10, TimeUnit.SECONDS))
+        val faenge = faengeladen(context)
+        assertEquals("Race Condition: Alle $anzahl Fänge müssen noch vorhanden sein",
+            anzahl, faenge.size)
+        assertTrue("Race Condition: Alle Fänge müssen aktualisiert sein",
+            faenge.all { it.fischart.startsWith("Neu_") })
+    }
+
+    @SdkSuppress(minSdkVersion = 28)
+    @Test
+    fun heicFotoWirdKorrektImportiert() {
+        // Regression für Issue #20: HEIC/HEIF-Fotos wurden schwarz importiert.
+        //
+        // BitmapFactory kann HEIF auf manchen Geräten nicht dekodieren und gibt null zurück.
+        // Der ImageDecoder-Fallback (API 28+) soll dann einspringen.
+        // Das Testbild (64x64, grün) liegt als echtes HEIC in den androidTest-Assets,
+        // wird ins App-Verzeichnis kopiert und via uriZuPfad importiert.
+        val heicDatei = File(
+            context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "test_heic.heic"
+        )
+        InstrumentationRegistry.getInstrumentation().context.assets.open("test_foto.heic").use { eingabe ->
+            FileOutputStream(heicDatei).use { eingabe.copyTo(it) }
+        }
+        testDateien.add(heicDatei)
+
+        val uri = Uri.fromFile(heicDatei)
+        val pfad = uriZuPfad(context, uri)
+        if (pfad.isNotBlank()) testDateien.add(File(pfad))
+
+        assertTrue("HEIC-Import muss funktionieren (ImageDecoder-Fallback)", pfad.isNotBlank())
+        assertTrue("Importierte HEIC-Datei muss existieren", File(pfad).exists())
+        assertTrue("Importierte HEIC-Datei muss Inhalt haben", File(pfad).length() > 0)
+        // Das importierte JPEG darf nicht schwarz sein: Mittelpixel muss grün dominiert sein
+        val importiert = BitmapFactory.decodeFile(pfad)
+        assertNotNull("Importiertes JPEG muss dekodierbar sein", importiert)
+        val pixel = importiert.getPixel(importiert.width / 2, importiert.height / 2)
+        assertTrue("Importiertes Bild darf nicht schwarz sein",
+            android.graphics.Color.green(pixel) > 100 &&
+                android.graphics.Color.green(pixel) > android.graphics.Color.red(pixel))
+    }
+
+    @Test
+    fun exifUndImportAusHintergrundThreadFunktioniertKorrekt() {
+        // Regression für Issue #19: ANR beim Galerie-Import.
+        //
+        // Seit dem ANR-Fix läuft galerieImportStarten() in einem Background-Thread.
+        // Dieser Test stellt sicher, dass exifDatenLesen() und uriZuPfad() auch
+        // aus einem Nicht-Main-Thread heraus korrekte Ergebnisse liefern und
+        // nicht durch Thread-Einschränkungen des ContentResolvers scheitern.
+        val foto = testFotoErstellen(
+            datumExif = "2026:03:08 15:50:00",
+            offsetExif = "+01:00",
+            lat = 53.5753,
+            lon = 10.0153
+        )
+        val latch = CountDownLatch(1)
+        var lat = 0.0
+        var datum = ""
+        var pfad = ""
+        Thread {
+            val uri = Uri.fromFile(foto)
+            val (d, l, _) = exifDatenLesen(context, uri)
+            datum = d
+            lat = l
+            pfad = uriZuPfad(context, uri)
+            latch.countDown()
+        }.start()
+
+        assertTrue("Hintergrund-Thread muss rechtzeitig fertig sein",
+            latch.await(10, TimeUnit.SECONDS))
+        assertEquals("Datum muss aus Hintergrund-Thread korrekt gelesen werden",
+            "08.03.2026 15:50", datum)
+        assertEquals("GPS muss aus Hintergrund-Thread korrekt gelesen werden",
+            53.5753, lat, 0.01)
+        assertTrue("Importpfad darf nicht leer sein", pfad.isNotBlank())
+        if (pfad.isNotBlank()) testDateien.add(File(pfad))
+        assertTrue("Importierte Datei muss existieren", File(pfad).exists())
     }
 }
