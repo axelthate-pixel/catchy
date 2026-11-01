@@ -58,6 +58,7 @@ import java.util.*
 import kotlin.concurrent.thread
 
 private const val TAG = "Catchy"
+private val speicherLock = Any()
 
 // Hält die aktuellen Wetterdaten zu einem Fang
 data class Wetter(
@@ -120,7 +121,7 @@ fun faengeladen(context: Context): List<Fang> {
 }
 
 // Hängt einen neuen Fang an die bestehende JSON-Liste in den SharedPreferences an
-fun fangspeichern(context: Context, fang: Fang) {
+fun fangspeichern(context: Context, fang: Fang) = synchronized(speicherLock) {
     val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
     val json = prefs.getString("faenge", "[]") ?: "[]"
     val array = JSONArray(json)
@@ -144,7 +145,7 @@ fun fangspeichern(context: Context, fang: Fang) {
 }
 
 // Ersetzt einen bestehenden Fang (gleiche ID) durch die aktualisierte Version
-fun fangAktualisieren(context: Context, fang: Fang) {
+fun fangAktualisieren(context: Context, fang: Fang) = synchronized(speicherLock) {
     val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
     val json = prefs.getString("faenge", "[]") ?: "[]"
     val array = JSONArray(json)
@@ -174,7 +175,7 @@ fun fangAktualisieren(context: Context, fang: Fang) {
 }
 
 // Entfernt den Fang mit der angegebenen ID aus den SharedPreferences
-fun fangloeschen(context: Context, id: Long) {
+fun fangloeschen(context: Context, id: Long) = synchronized(speicherLock) {
     val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
     val json = prefs.getString("faenge", "[]") ?: "[]"
     val array = JSONArray(json)
@@ -205,21 +206,23 @@ fun datenImportieren(context: Context, uri: Uri): Int {
     return try {
         val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return 0
         val array = JSONArray(json)
-        val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
-        val bestehend = JSONArray(prefs.getString("faenge", "[]") ?: "[]")
-        // Bestehende IDs in ein Set laden für schnellen Duplikat-Check
-        val bestehendeIds = mutableSetOf<Long>()
-        for (i in 0 until bestehend.length()) bestehendeIds.add(bestehend.getJSONObject(i).getLong("id"))
-        var importiert = 0
-        for (i in 0 until array.length()) {
-            val obj = array.getJSONObject(i)
-            if (!bestehendeIds.contains(obj.getLong("id"))) {
-                bestehend.put(obj)
-                importiert++
+        synchronized(speicherLock) {
+            val prefs = context.getSharedPreferences("angelapp", Context.MODE_PRIVATE)
+            val bestehend = JSONArray(prefs.getString("faenge", "[]") ?: "[]")
+            // Bestehende IDs in ein Set laden für schnellen Duplikat-Check
+            val bestehendeIds = mutableSetOf<Long>()
+            for (i in 0 until bestehend.length()) bestehendeIds.add(bestehend.getJSONObject(i).getLong("id"))
+            var importiert = 0
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                if (!bestehendeIds.contains(obj.getLong("id"))) {
+                    bestehend.put(obj)
+                    importiert++
+                }
             }
+            prefs.edit().putString("faenge", bestehend.toString()).apply()
+            importiert
         }
-        prefs.edit().putString("faenge", bestehend.toString()).apply()
-        importiert
     } catch (e: Exception) { android.util.Log.e(TAG, "Import fehlgeschlagen", e); -1 }
 }
 
@@ -403,8 +406,22 @@ fun exifDatenLesen(context: Context, uri: Uri): Triple<String, Double, Double> {
         val exif = ExifInterface(stream)
         val latLon = FloatArray(2)
         val hatGps = exif.getLatLong(latLon)
-        val lat = if (hatGps) latLon[0].toDouble() else 0.0
-        val lon = if (hatGps) latLon[1].toDouble() else 0.0
+        var lat = if (hatGps) latLon[0].toDouble() else 0.0
+        var lon = if (hatGps) latLon[1].toDouble() else 0.0
+        // GPS-Fallback: Bei Google Photos-URIs schlägt setRequireOriginal fehl und Android
+        // strippt GPS aus dem Stream. Dateipfad-Zugriff via MediaStore umgeht das Stripping.
+        if (!hatGps) {
+            val pfad = try {
+                context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null)
+                    ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            } catch (e: Exception) { android.util.Log.e(TAG, "MediaStore-Pfadabfrage fehlgeschlagen", e); null }
+            if (!pfad.isNullOrBlank() && java.io.File(pfad).exists()) {
+                try {
+                    val exifPfad = ExifInterface(pfad)
+                    if (exifPfad.getLatLong(latLon)) { lat = latLon[0].toDouble(); lon = latLon[1].toDouble() }
+                } catch (e: java.io.IOException) { android.util.Log.e(TAG, "GPS-Fallback fehlgeschlagen", e) }
+            }
+        }
         // TAG_DATETIME_ORIGINAL bevorzugen (Aufnahmezeitpunkt), TAG_DATETIME als Fallback
         val datumRoh = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
             ?: exif.getAttribute(ExifInterface.TAG_DATETIME) ?: ""
@@ -453,9 +470,18 @@ fun uriZuPfad(context: Context, uri: Uri, suffix: Int = 0): String {
         while (w > maxSeite * 2 || h > maxSeite * 2) { sampleSize *= 2; w /= 2; h /= 2 }
 
         val opts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
-        val bitmap = context.contentResolver.openInputStream(uri)?.use {
+        val bitmap: android.graphics.Bitmap? = context.contentResolver.openInputStream(uri)?.use {
             android.graphics.BitmapFactory.decodeStream(it, null, opts)
-        } ?: return ""
+        } ?: if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            try {
+                val src = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
+                android.graphics.ImageDecoder.decodeBitmap(src) { dec, _, _ ->
+                    dec.setTargetSampleSize(sampleSize)
+                    dec.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                }
+            } catch (e: java.io.IOException) { android.util.Log.e(TAG, "ImageDecoder fehlgeschlagen", e); null }
+        } else null
+        if (bitmap == null) return ""
 
         // Feinskalierung auf maxSeite px (längste Seite), Seitenverhältnis bleibt erhalten
         val skaliert = if (bitmap.width > maxSeite || bitmap.height > maxSeite) {
@@ -1052,91 +1078,96 @@ fun FangListe(
     var pendingGalerieUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
 
     fun galerieImportStarten(uris: List<Uri>) {
-        var erfolgreich = 0
-        var fehlgeschlagen = 0
-        var mitExif = 0
-        var mitGps = 0
+        exportMeldung = if (uris.size == 1) "Foto wird importiert…" else "${uris.size} Fotos werden importiert…"
+        // Import im Hintergrund, damit der Main Thread bei vielen Fotos nicht blockiert (Issue #19)
+        thread {
+            var erfolgreich = 0
+            var fehlgeschlagen = 0
+            var mitExif = 0
+            var mitGps = 0
 
-        for ((index, uri) in uris.withIndex()) {
-            val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
-            val pfad = uriZuPfad(context, uri, index)
-            val verwendetesDatum = if (exifDatum.isNotBlank()) exifDatum else datum
-            if (pfad.isNotBlank()) {
-                erfolgreich++
-                if (exifDatum.isNotBlank()) mitExif++
-                if (lat != 0.0) mitGps++
-                val fangId = System.currentTimeMillis() + index
-                thread {
-                    val wetter: Wetter? = if (lat != 0.0) {
-                        try {
-                            val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
-                                SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum) ?: Date()
-                            )
-                            val url = "https://archive-api.open-meteo.com/v1/archive?" +
-                                "latitude=${String.format(Locale.US, "%.6f", lat)}" +
-                                "&longitude=${String.format(Locale.US, "%.6f", lon)}" +
-                                "&start_date=$datumFormatiert&end_date=$datumFormatiert" +
-                                "&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
-                            val response = URL(url).readText()
-                            val json = JSONObject(response)
-                            val hourly = json.getJSONObject("hourly")
-                            Wetter(
-                                temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
-                                wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
-                                luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
-                                bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
-                            )
-                        } catch (e: java.io.IOException) {
-                            android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null
-                        } catch (e: org.json.JSONException) {
-                            android.util.Log.e(TAG, "Wetter JSON fehlgeschlagen", e); null
-                        }
-                    } else null
-                    fangspeichern(context, Fang(
-                        id = fangId,
-                        fischart = "wird erkannt...",
-                        laenge = "",
-                        notizen = "Aus Galerie importiert",
-                        datum = verwendetesDatum,
-                        latitude = lat,
-                        longitude = lon,
-                        temperatur = wetter?.temperatur ?: 0.0,
-                        wind = wetter?.wind ?: 0.0,
-                        luftdruck = wetter?.luftdruck ?: 0.0,
-                        bewoelkung = wetter?.bewoelkung ?: 0,
-                        fotoPfad = pfad,
-                        gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
-                        mondphase = mondphaseBerechnen(verwendetesDatum)
-                    ))
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        faenge = faengeladen(context)
-                    }
-                    fischartErkennen(pfad) { erkannteArt ->
-                        val gespeicherter = faengeladen(context).find { it.id == fangId }
-                        if (gespeicherter != null) {
-                            fangAktualisieren(context, gespeicherter.copy(
-                                fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
-                            ))
-                        }
+            for ((index, uri) in uris.withIndex()) {
+                val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
+                val pfad = uriZuPfad(context, uri, index)
+                val verwendetesDatum = if (exifDatum.isNotBlank()) exifDatum else datum
+                if (pfad.isNotBlank()) {
+                    erfolgreich++
+                    if (exifDatum.isNotBlank()) mitExif++
+                    if (lat != 0.0) mitGps++
+                    val fangId = System.currentTimeMillis() + index
+                    thread {
+                        val wetter: Wetter? = if (lat != 0.0) {
+                            try {
+                                val datumFormatiert = SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).format(
+                                    SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).parse(verwendetesDatum) ?: Date()
+                                )
+                                val url = "https://archive-api.open-meteo.com/v1/archive?" +
+                                    "latitude=${String.format(Locale.US, "%.6f", lat)}" +
+                                    "&longitude=${String.format(Locale.US, "%.6f", lon)}" +
+                                    "&start_date=$datumFormatiert&end_date=$datumFormatiert" +
+                                    "&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                                val response = URL(url).readText()
+                                val json = JSONObject(response)
+                                val hourly = json.getJSONObject("hourly")
+                                Wetter(
+                                    temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
+                                    wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
+                                    luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
+                                    bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
+                                )
+                            } catch (e: java.io.IOException) {
+                                android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null
+                            } catch (e: org.json.JSONException) {
+                                android.util.Log.e(TAG, "Wetter JSON fehlgeschlagen", e); null
+                            }
+                        } else null
+                        fangspeichern(context, Fang(
+                            id = fangId,
+                            fischart = "wird erkannt...",
+                            laenge = "",
+                            notizen = "Aus Galerie importiert",
+                            datum = verwendetesDatum,
+                            latitude = lat,
+                            longitude = lon,
+                            temperatur = wetter?.temperatur ?: 0.0,
+                            wind = wetter?.wind ?: 0.0,
+                            luftdruck = wetter?.luftdruck ?: 0.0,
+                            bewoelkung = wetter?.bewoelkung ?: 0,
+                            fotoPfad = pfad,
+                            gezeiten = gezeiteBerechnen(verwendetesDatum, lat, lon),
+                            mondphase = mondphaseBerechnen(verwendetesDatum)
+                        ))
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
                             faenge = faengeladen(context)
                         }
+                        fischartErkennen(pfad) { erkannteArt ->
+                            val gespeicherter = faengeladen(context).find { it.id == fangId }
+                            if (gespeicherter != null) {
+                                fangAktualisieren(context, gespeicherter.copy(
+                                    fischart = if (erkannteArt.isNotBlank()) erkannteArt else "Unbekannt"
+                                ))
+                            }
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                faenge = faengeladen(context)
+                            }
+                        }
                     }
+                } else {
+                    fehlgeschlagen++
                 }
-            } else {
-                fehlgeschlagen++
             }
-        }
 
-        val gesamt = uris.size
-        exportMeldung = buildString {
-            if (gesamt == 1) {
-                append(if (erfolgreich == 1) "Foto importiert" else "Import fehlgeschlagen")
-            } else {
-                append("$erfolgreich von $gesamt Fotos importiert")
-                if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
+            val gesamt = uris.size
+            val meldung = buildString {
+                if (gesamt == 1) {
+                    append(if (erfolgreich == 1) "Foto importiert" else "Import fehlgeschlagen")
+                } else {
+                    append("$erfolgreich von $gesamt Fotos importiert")
+                    if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
+                }
+                append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
             }
-            append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
+            android.os.Handler(android.os.Looper.getMainLooper()).post { exportMeldung = meldung }
         }
     }
 
