@@ -109,7 +109,7 @@ class CatchyUnitTest {
         val gpx = gpxInhalt(faenge)
         assertTrue(gpx.contains("""lat="53.575300""""))
         assertTrue(gpx.contains("""lon="10.015300""""))
-        assertTrue(gpx.contains("<name>Hecht</name>"))
+        assertTrue(gpx.contains("<name>Hecht 60cm 08.03.26</name>"))
         assertTrue(gpx.contains("Fishing Hot Spot Facility"))
     }
 
@@ -151,9 +151,9 @@ class CatchyUnitTest {
         val gpx = gpxInhalt(faenge)
         val wptAnzahl = Regex("<wpt ").findAll(gpx).count()
         assertEquals("Nur Fänge mit GPS dürfen exportiert werden", 2, wptAnzahl)
-        assertTrue(gpx.contains("<name>Hecht</name>"))
-        assertTrue(gpx.contains("<name>Zander</name>"))
-        assertFalse("Fang ohne GPS darf nicht im GPX sein", gpx.contains("<name>Barsch</name>"))
+        assertTrue(gpx.contains("<name>Hecht 01.03.26</name>"))
+        assertTrue(gpx.contains("<name>Zander 08.03.26</name>"))
+        assertFalse("Fang ohne GPS darf nicht im GPX sein", gpx.contains("<name>Barsch"))
     }
 
     @Test
@@ -204,6 +204,18 @@ class CatchyUnitTest {
     }
 
     @Test
+    fun gpxBeschreibungOhneGradzeichen() {
+        // Manche Kartenplotter stellen ° nicht dar – Temperatur daher als "12.6 C"
+        val faenge = listOf(
+            Fang(id = 1L, fischart = "Hecht", laenge = "", notizen = "", datum = "01.11.2024 16:51",
+                latitude = 51.67, longitude = 4.2, temperatur = 12.6)
+        )
+        val gpx = gpxInhalt(faenge)
+        assertTrue(gpx.contains("| 12.6 C"))
+        assertFalse(gpx.contains("°"))
+    }
+
+    @Test
     fun gpxOhneLesbaresDatumLaesstTimeWeg() {
         val faenge = listOf(
             Fang(id = 1L, fischart = "Hecht", laenge = "", notizen = "", datum = "unbekannt",
@@ -212,6 +224,7 @@ class CatchyUnitTest {
         val gpx = gpxInhalt(faenge)
         assertTrue(gpx.contains("<wpt "))
         assertFalse("Ohne gültiges Datum darf kein <time> entstehen", gpx.contains("<time>"))
+        assertTrue("Ohne gültiges Datum bleibt der Name die Fischart", gpx.contains("<name>Hecht</name>"))
     }
 
     // ─────────────────────────────────────────────────────────────
