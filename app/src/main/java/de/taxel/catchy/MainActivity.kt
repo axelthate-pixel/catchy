@@ -226,34 +226,44 @@ fun datenImportieren(context: Context, uri: Uri): Int {
     } catch (e: Exception) { android.util.Log.e(TAG, "Import fehlgeschlagen", e); -1 }
 }
 
+// Baut den GPX-Inhalt (Waypoints) für alle Fänge mit GPS-Koordinaten
+fun gpxInhalt(faenge: List<Fang>): String {
+    val sb = StringBuilder()
+    sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
+    sb.appendLine("""<gpx version="1.1" creator="Catchy" xmlns="http://www.topografix.com/GPX/1/1">""")
+    // GPX verlangt die Zeit in UTC (ISO 8601)
+    val zeitFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+    zeitFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+    // Nur Fänge mit gültigem GPS-Eintrag exportieren
+    val fangeMitGps = faenge.filter { it.latitude != 0.0 }
+    for (fang in fangeMitGps) {
+        val lat = String.format(Locale.US, "%.6f", fang.latitude)
+        val lon = String.format(Locale.US, "%.6f", fang.longitude)
+        val name = fang.fischart.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val beschreibung = buildString {
+            append(fang.datum)
+            if (fang.laenge.isNotBlank()) append(" | ${fang.laenge} cm")
+            if (fang.temperatur != 0.0) append(" | ${fang.temperatur}°C")
+            if (fang.wind != 0.0) append(" | Wind ${fang.wind} m/s")
+        }.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        sb.appendLine("""  <wpt lat="$lat" lon="$lon">""")
+        // Laut GPX-Schema steht <time> vor <name>
+        fangZeitpunktMillis(fang.datum)?.let { sb.appendLine("""    <time>${zeitFormat.format(Date(it))}</time>""") }
+        sb.appendLine("""    <name>$name</name>""")
+        sb.appendLine("""    <desc>$beschreibung</desc>""")
+        sb.appendLine("""    <sym>Fishing Hot Spot Facility</sym>""")
+        sb.appendLine("""  </wpt>""")
+    }
+    sb.appendLine("""</gpx>""")
+    return sb.toString()
+}
+
 // Exportiert alle Fänge mit GPS-Koordinaten als GPX-Waypoint-Datei und gibt eine teilbare URI zurück
 fun gpxExportieren(context: Context, faenge: List<Fang>): Uri? {
     return try {
-        val sb = StringBuilder()
-        sb.appendLine("""<?xml version="1.0" encoding="UTF-8"?>""")
-        sb.appendLine("""<gpx version="1.1" creator="Catchy" xmlns="http://www.topografix.com/GPX/1/1">""")
-        // Nur Fänge mit gültigem GPS-Eintrag exportieren
-        val fangeMitGps = faenge.filter { it.latitude != 0.0 }
-        for (fang in fangeMitGps) {
-            val lat = String.format(Locale.US, "%.6f", fang.latitude)
-            val lon = String.format(Locale.US, "%.6f", fang.longitude)
-            val name = fang.fischart.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            val beschreibung = buildString {
-                append(fang.datum)
-                if (fang.laenge.isNotBlank()) append(" | ${fang.laenge} cm")
-                if (fang.temperatur != 0.0) append(" | ${fang.temperatur}°C")
-                if (fang.wind != 0.0) append(" | Wind ${fang.wind} m/s")
-            }.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            sb.appendLine("""  <wpt lat="$lat" lon="$lon">""")
-            sb.appendLine("""    <name>$name</name>""")
-            sb.appendLine("""    <desc>$beschreibung</desc>""")
-            sb.appendLine("""    <sym>Fishing Hot Spot Facility</sym>""")
-            sb.appendLine("""  </wpt>""")
-        }
-        sb.appendLine("""</gpx>""")
         val zeitstempel = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
         val datei = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "catchy_fangplaetze_${zeitstempel}.gpx")
-        datei.writeText(sb.toString())
+        datei.writeText(gpxInhalt(faenge))
         FileProvider.getUriForFile(context, "de.taxel.catchy.fileprovider", datei)
     } catch (e: java.io.IOException) { android.util.Log.e(TAG, "GPX Export fehlgeschlagen", e); null }
 }
@@ -279,8 +289,20 @@ fun wetterAbrufen(lat: Double, lon: Double, onErgebnis: (Wetter?) -> Unit) {
     }
 }
 
+// Wandelt ein Fangdatum "dd.MM.yyyy HH:mm" (deutsche Ortszeit) in Epoch-Millis um; null bei ungültigem Datum
+fun fangZeitpunktMillis(datum: String): Long? {
+    val format = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
+    format.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
+    // parse mit ParsePosition liefert null statt einer Exception
+    return format.parse(datum, java.text.ParsePosition(0))?.time
+}
+
+// Stunde des Fangs (0–23) als Index in die stündlichen Open-Meteo-Werte; 12 (Mittag), wenn keine Uhrzeit lesbar ist
+fun wetterStundenIndex(datum: String): Int =
+    datum.substringAfter(" ", "").substringBefore(":").toIntOrNull()?.takeIf { it in 0..23 } ?: 12
+
 // Ruft historische Wetterdaten für ein bestimmtes Datum von der Open-Meteo-Archiv-API ab (Hintergrund-Thread).
-// Index 12 entspricht dem Stundenwert um 12:00 Uhr Mittags als repräsentativer Tageswert.
+// Die Stundenwerte werden in deutscher Ortszeit angefragt und der Wert zur Fanguhrzeit verwendet.
 @Suppress("TooGenericExceptionCaught")
 fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebnis: (Wetter?) -> Unit) {
     thread {
@@ -292,15 +314,17 @@ fun historischesWetterAbrufen(lat: Double, lon: Double, datum: String, onErgebni
             val url = "https://archive-api.open-meteo.com/v1/archive?" +
                 "latitude=$lat&longitude=$lon&" +
                 "start_date=$datumFormatiert&end_date=$datumFormatiert&" +
-                "hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                "hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms" +
+                "&timezone=Europe%2FBerlin"
             val response = URL(url).readText()
             val json = JSONObject(response)
             val hourly = json.getJSONObject("hourly")
+            val stunde = wetterStundenIndex(datum).coerceAtMost(hourly.getJSONArray("temperature_2m").length() - 1)
             onErgebnis(Wetter(
-                temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
-                wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
-                luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
-                bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
+                temperatur = hourly.getJSONArray("temperature_2m").getDouble(stunde),
+                wind = hourly.getJSONArray("wind_speed_10m").getDouble(stunde),
+                luftdruck = hourly.getJSONArray("surface_pressure").getDouble(stunde),
+                bewoelkung = hourly.getJSONArray("cloud_cover").getInt(stunde)
             ))
         } catch (e: Exception) { android.util.Log.e(TAG, "Historisches Wetter abrufen fehlgeschlagen", e); onErgebnis(null) }
     }
@@ -493,11 +517,7 @@ fun gpsAusLokalerKopie(context: Context, aufnahmeMillis: Long, toleranz: Long = 
 // Schätzt den Standort eines Fotos ohne GPS über das zeitlich nächste Foto mit GPS (höchstens 5 Minuten Abstand),
 // so wie Google Photos den „ungefähren Aufnahmeort“ bildet. datum im Format dd.MM.yyyy HH:mm (Berliner Zeit).
 fun standortSchaetzen(context: Context, datum: String): Pair<Double, Double>? {
-    val aufnahmeMillis = try {
-        val format = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
-        format.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
-        format.parse(datum)?.time ?: 0L
-    } catch (e: java.text.ParseException) { android.util.Log.e(TAG, "Datum für Standortschätzung ungültig", e); 0L }
+    val aufnahmeMillis = fangZeitpunktMillis(datum) ?: 0L
     return gpsAusLokalerKopie(context, aufnahmeMillis, toleranz = 5 * 60 * 1000L)
 }
 
@@ -1174,15 +1194,18 @@ fun FangListe(
                                     "latitude=${String.format(Locale.US, "%.6f", lat)}" +
                                     "&longitude=${String.format(Locale.US, "%.6f", lon)}" +
                                     "&start_date=$datumFormatiert&end_date=$datumFormatiert" +
-                                    "&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms"
+                                    "&hourly=temperature_2m,wind_speed_10m,surface_pressure,cloud_cover&wind_speed_unit=ms" +
+                                    "&timezone=Europe%2FBerlin"
                                 val response = URL(url).readText()
                                 val json = JSONObject(response)
                                 val hourly = json.getJSONObject("hourly")
+                                val stunde = wetterStundenIndex(verwendetesDatum)
+                                    .coerceAtMost(hourly.getJSONArray("temperature_2m").length() - 1)
                                 Wetter(
-                                    temperatur = hourly.getJSONArray("temperature_2m").getDouble(12),
-                                    wind = hourly.getJSONArray("wind_speed_10m").getDouble(12),
-                                    luftdruck = hourly.getJSONArray("surface_pressure").getDouble(12),
-                                    bewoelkung = hourly.getJSONArray("cloud_cover").getInt(12)
+                                    temperatur = hourly.getJSONArray("temperature_2m").getDouble(stunde),
+                                    wind = hourly.getJSONArray("wind_speed_10m").getDouble(stunde),
+                                    luftdruck = hourly.getJSONArray("surface_pressure").getDouble(stunde),
+                                    bewoelkung = hourly.getJSONArray("cloud_cover").getInt(stunde)
                                 )
                             } catch (e: java.io.IOException) {
                                 android.util.Log.e(TAG, "Wetter laden fehlgeschlagen", e); null
