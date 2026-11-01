@@ -461,14 +461,13 @@ fun exifDatenLesen(context: Context, uri: Uri): Triple<String, Double, Double> {
 // Nötig, weil die Fotoauswahl bearbeitete Fotos aus der Google-Photos-Cloud liefert und dabei den Standort entfernt.
 // Funktioniert nur mit Vollzugriff auf Fotos (READ_MEDIA_IMAGES bzw. READ_EXTERNAL_STORAGE), sonst null (Issue #22).
 @Suppress("TooGenericExceptionCaught")
-fun gpsAusLokalerKopie(context: Context, aufnahmeMillis: Long): Pair<Double, Double>? {
+fun gpsAusLokalerKopie(context: Context, aufnahmeMillis: Long, toleranz: Long = 1500L): Pair<Double, Double>? {
     val berechtigung = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU)
         Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE
     if (aufnahmeMillis <= 0L ||
         ContextCompat.checkSelfPermission(context, berechtigung) != PackageManager.PERMISSION_GRANTED
     ) return null
     return try {
-        val toleranz = 1500L
         val kandidaten = mutableListOf<Pair<Long, Long>>() // MediaStore-ID zu Abstand der Aufnahmezeit
         context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -489,6 +488,17 @@ fun gpsAusLokalerKopie(context: Context, aufnahmeMillis: Long): Pair<Double, Dou
             }
         }
     } catch (e: Exception) { android.util.Log.e(TAG, "Lokale Kopie für GPS nicht lesbar", e); null }
+}
+
+// Schätzt den Standort eines Fotos ohne GPS über das zeitlich nächste Foto mit GPS (höchstens 5 Minuten Abstand),
+// so wie Google Photos den „ungefähren Aufnahmeort“ bildet. datum im Format dd.MM.yyyy HH:mm (Berliner Zeit).
+fun standortSchaetzen(context: Context, datum: String): Pair<Double, Double>? {
+    val aufnahmeMillis = try {
+        val format = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY)
+        format.timeZone = java.util.TimeZone.getTimeZone("Europe/Berlin")
+        format.parse(datum)?.time ?: 0L
+    } catch (e: java.text.ParseException) { android.util.Log.e(TAG, "Datum für Standortschätzung ungültig", e); 0L }
+    return gpsAusLokalerKopie(context, aufnahmeMillis, toleranz = 5 * 60 * 1000L)
 }
 
 // Erstellt eine leere temporäre JPG-Datei im externen Bilderverzeichnis für die Kamera-Aufnahme
@@ -894,11 +904,16 @@ fun FangBearbeiten(fang: Fang, zeigeListeFuer: (Long) -> Unit) {
 
     val galerieLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
+            val (exifDatum, exifLat, exifLon) = exifDatenLesen(context, uri)
+            // Kein GPS im Foto: Standort vom zeitlich nächsten Foto übernehmen (max. 5 Minuten)
+            val schaetzung = if (exifLat == 0.0 && exifLon == 0.0 && exifDatum.isNotBlank()) standortSchaetzen(context, exifDatum) else null
+            val lat = schaetzung?.first ?: exifLat
+            val lon = schaetzung?.second ?: exifLon
             fotoPfad = uriZuPfad(context, uri)
             fotoUri = Uri.fromFile(File(fotoPfad))
             if (exifDatum.isNotBlank()) datum = exifDatum
             if (lat != 0.0) { latText = String.format(Locale.US, "%.6f", lat); lonText = String.format(Locale.US, "%.6f", lon) }
+            if (schaetzung != null) notizen = if (notizen.isBlank()) "Standort geschätzt" else "$notizen · Standort geschätzt"
         }
     }
 
@@ -1131,15 +1146,23 @@ fun FangListe(
             var fehlgeschlagen = 0
             var mitExif = 0
             var mitGps = 0
+            var geschaetzt = 0
 
             for ((index, uri) in uris.withIndex()) {
-                val (exifDatum, lat, lon) = exifDatenLesen(context, uri)
+                val (exifDatum, exifLat, exifLon) = exifDatenLesen(context, uri)
+                // Kein GPS im Foto: Standort vom zeitlich nächsten Foto übernehmen (max. 5 Minuten)
+                val schaetzung = if (exifLat == 0.0 && exifLon == 0.0 && exifDatum.isNotBlank()) {
+                    standortSchaetzen(context, exifDatum)
+                } else null
+                val lat = schaetzung?.first ?: exifLat
+                val lon = schaetzung?.second ?: exifLon
                 val pfad = uriZuPfad(context, uri, index)
                 val verwendetesDatum = if (exifDatum.isNotBlank()) exifDatum else datum
                 if (pfad.isNotBlank()) {
                     erfolgreich++
                     if (exifDatum.isNotBlank()) mitExif++
                     if (lat != 0.0) mitGps++
+                    if (schaetzung != null) geschaetzt++
                     val fangId = System.currentTimeMillis() + index
                     thread {
                         val wetter: Wetter? = if (lat != 0.0) {
@@ -1171,7 +1194,7 @@ fun FangListe(
                             id = fangId,
                             fischart = "wird erkannt...",
                             laenge = "",
-                            notizen = "Aus Galerie importiert",
+                            notizen = if (schaetzung != null) "Aus Galerie importiert · Standort geschätzt" else "Aus Galerie importiert",
                             datum = verwendetesDatum,
                             latitude = lat,
                             longitude = lon,
@@ -1212,6 +1235,7 @@ fun FangListe(
                     if (fehlgeschlagen > 0) append(", $fehlgeschlagen fehlgeschlagen")
                 }
                 append(" · EXIF-Datum: $mitExif/$gesamt · GPS: $mitGps/$gesamt")
+                if (geschaetzt > 0) append(" (davon $geschaetzt geschätzt)")
                 if (mitGps < erfolgreich) append("\nKein GPS? Bei Fotos aus der Google-Photos-Cloud hilft der Zugriff auf alle Fotos.")
             }
             android.os.Handler(android.os.Looper.getMainLooper()).post { exportMeldung = meldung }
