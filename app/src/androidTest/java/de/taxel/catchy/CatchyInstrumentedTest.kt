@@ -702,6 +702,35 @@ class CatchyInstrumentedTest {
     }
 
     @Test
+    fun hochkantFotoWirdBeimImportGedreht() {
+        // Kameras speichern Hochkant-Fotos oft quer und setzen nur das EXIF-Tag Orientation.
+        // uriZuPfad() speichert ein neues JPEG ohne dieses Tag – die Pixel müssen daher gedreht werden.
+        // Testbild: 80x40 quer, links rot / rechts blau, Orientation = 90° im Uhrzeigersinn.
+        val datei = File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES), "test_hochkant.jpg")
+        val quer = Bitmap.createBitmap(80, 40, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(quer)
+        canvas.drawColor(android.graphics.Color.BLUE)
+        canvas.drawRect(0f, 0f, 40f, 40f, android.graphics.Paint().apply { color = android.graphics.Color.RED })
+        FileOutputStream(datei).use { quer.compress(Bitmap.CompressFormat.JPEG, 100, it) }
+        ExifInterface(datei.absolutePath).apply {
+            setAttribute(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_ROTATE_90.toString())
+            saveAttributes()
+        }
+        testDateien.add(datei)
+
+        val pfad = uriZuPfad(context, Uri.fromFile(datei))
+        if (pfad.isNotBlank()) testDateien.add(File(pfad))
+
+        val importiert = BitmapFactory.decodeFile(pfad)
+        assertNotNull("Importiertes JPEG muss dekodierbar sein", importiert)
+        assertEquals("Breite nach Drehung", 40, importiert.width)
+        assertEquals("Höhe nach Drehung", 80, importiert.height)
+        // Nach 90° im Uhrzeigersinn liegt die linke (rote) Hälfte oben
+        val oben = importiert.getPixel(20, 10)
+        assertTrue("Oben muss rot sein", android.graphics.Color.red(oben) > 200 && android.graphics.Color.blue(oben) < 60)
+    }
+
+    @Test
     fun exifUndImportAusHintergrundThreadFunktioniertKorrekt() {
         // Regression für Issue #19: ANR beim Galerie-Import.
         //
