@@ -23,3 +23,11 @@ keystore.properties
 # Claude Code (lokal)
 .claude/settings.local.json
 .claude/worktrees/
+
+# Persönliche Android-Studio-Einstellungen (Geräteauswahl, Tabellenansichten, Gemini/Studio Bot, Markdown-Vorschau)
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+/.idea/androidTestResultsUserPreferences.xml
+/.idea/appInsightsSettings.xml
+/.idea/studiobot.xml
+/.idea/markdown.xml
