@@ -58,6 +58,9 @@ import java.util.*
 import kotlin.concurrent.thread
 
 private const val TAG = "Catchy"
+
+// Farbe des Karten-PINs, der beim Sprung von einem Listeneintrag den angesteuerten Fangort markiert
+private const val HERVORGEHOBENER_PIN_FARBE = 0xFFE53935.toInt()
 private val speicherLock = Any()
 
 // Hält die aktuellen Wetterdaten zu einem Fang
@@ -1484,11 +1487,19 @@ fun FangKarte(zurueck: () -> Unit, zentriereFang: Fang? = null) {
                         val zielFang = zentriereFang ?: faenge.firstOrNull()
                         controller.setZoom(if (zentriereFang != null) 15.0 else 12.0)
                         zielFang?.let { controller.setCenter(GeoPoint(it.latitude, it.longitude)) }
-                        faenge.forEach { fang ->
+                        // Angesteuerter Fang zuletzt hinzufügen, damit sein PIN über allen anderen liegt
+                        faenge.sortedBy { it.id == zentriereFang?.id }.forEach { fang ->
                             val marker = Marker(this)
                             marker.position = GeoPoint(fang.latitude, fang.longitude)
                             marker.title = fang.fischart
-                            
+                            if (fang.id == zentriereFang?.id) {
+                                // Eigene Kopie des Standard-Icons einfärben, damit die übrigen PINs unverändert bleiben
+                                marker.icon.constantState?.newDrawable(resources)?.mutate()?.let { icon ->
+                                    icon.setTint(HERVORGEHOBENER_PIN_FARBE)
+                                    marker.icon = icon
+                                }
+                            }
+
                             // Distanz berechnen, falls Standort verfügbar
                             val distanzText = meinePosition?.let { pos ->
                                 val ergebnisse = FloatArray(1)
